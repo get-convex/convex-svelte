@@ -1,20 +1,12 @@
-# create-svelte
+# convex-svelte
 
-Everything you need to build a Svelte library, powered by [`create-svelte`](https://github.com/sveltejs/kit/tree/main/packages/create-svelte).
+Convex client for Svelte.
 
-Read more about creating a library [in the docs](https://kit.svelte.dev/docs/packaging).
+Currently exposes a `ConvexProvider` component which takes a Convex deployment URL, a `useConvexClient()` and a `useQuery()`.
 
-## Creating a project
+### Example
 
-If you're seeing this, you've probably already done this step. Congrats!
-
-```bash
-# create a new project in the current directory
-npm create svelte@latest
-
-# create a new project in my-app
-npm create svelte@latest my-app
-```
+# SvelteKit Library Instructions
 
 ## Developing
 
@@ -22,9 +14,6 @@ Once you've created a project and installed dependencies with `npm install` (or 
 
 ```bash
 npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
 ```
 
 Everything inside `src/lib` is part of your library, everything inside `src/routes` can be used as a showcase or preview app.
