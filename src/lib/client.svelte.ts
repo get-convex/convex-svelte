@@ -28,18 +28,14 @@ type UseQueryReturn<Query extends FunctionReference<'query'>> =
 	| { data: undefined; error: Error; isLoading: false; isStale: boolean }
 	| { data: FunctionReturnType<Query>; error: undefined; isLoading: false; isStale: boolean };
 
-// TODO should this thing be a class? that's how state is expressed in the normal world, outside the wackiness of React hooks.
-// Update the arguments somehow?
-// Changes to query and options will not be noticed.
-// Swapping out the ConvexClient used is not supported either.
+// Note that swapping out the current Convex client is not supported either.
 /**
  * Subscribe to a Convex query and return a reactive query object.
  * Pass in a reactive args object or closure returning to update args reactively.
  *
- * @param query
- * @param args
- * @param options
- * @returns
+ * @param query - a FunctionRefernece like `api.dir1.dir2.filename.func`.
+ * @param args - The arguments to the query function.
+ * @returns an object containing data, isLoading, error, and isStale.
  */
 export function useQuery<Query extends FunctionReference<'query'>>(
 	query: Query,
@@ -56,82 +52,69 @@ export function useQuery<Query extends FunctionReference<'query'>>(
 	// mutations on a reactive object. Is this a good idea?
 
 	const state: {
-		data: FunctionReturnType<Query> | Error | undefined;
+		result: FunctionReturnType<Query> | Error | undefined;
 		argsForLastResult: FunctionArgs<Query>;
 		lastResult: FunctionReturnType<Query> | Error | undefined;
 	} = $state({
-		data: undefined,
+		result: undefined,
 		argsForLastResult: undefined,
 		lastResult: undefined
-	});
-
-	// Do these transitions need to be batched?
-	// Since these properties can't be set atomically, cheat the types here.
-	// Be careful not let these lies spread!
-	const returnValue: {
-		data: FunctionReturnType<Query> | undefined;
-		error: Error | undefined;
-		isLoading: boolean;
-		isStale: boolean;
-	} = $state({
-		data: undefined,
-		error: undefined,
-		isLoading: true,
-		isStale: false
 	});
 
 	// When args change, unsubscribe and resubscribe.
 	$effect(() => {
 		const argsObject = parseArgs(args);
-		state.data = undefined;
-
-		// Transition to new query
-		if (options.useResultFromPreviousArguments && state.lastResult) {
-			// The result is only stale if the arguments differ
-			const sameArgs =
-				JSON.stringify(convexToJson(state.argsForLastResult)) ===
-				JSON.stringify(convexToJson(parseArgs(args)));
-			if (state.lastResult instanceof Error) {
-				returnValue.error = state.lastResult;
-				returnValue.data = undefined;
-			} else {
-				returnValue.data = state.lastResult;
-				returnValue.error = undefined;
-			}
-			returnValue.isStale = !sameArgs;
-			returnValue.isLoading = false;
-		} else {
-			returnValue.isLoading = true;
-			returnValue.data = undefined;
-			returnValue.error = undefined;
-			returnValue.isStale = false;
-		}
+		state.result = undefined;
 
 		const unsubscribe = client.onUpdate(query, argsObject, (dataFromServer) => {
+			// TODO is this helpful? (saving the original from being made reactive)
+			// (note we're potentially copying error objects here)
 			const copy = structuredClone(dataFromServer);
 
 			// TODO can/should each property be frozen?
-			state.data = copy;
+			state.result = copy;
 			state.argsForLastResult = argsObject;
 			state.lastResult = copy;
-
-			if ((dataFromServer as unknown) instanceof Error) {
-				returnValue.error = copy;
-				returnValue.isStale = false;
-				returnValue.isLoading = false;
-				returnValue.data = undefined;
-			} else {
-				returnValue.data = copy;
-				returnValue.error = undefined;
-				returnValue.isStale = false;
-				returnValue.isLoading = false;
-			}
 		});
 		return unsubscribe;
 	});
 
+	const sameArgs = $derived(
+		!!state.argsForLastResult &&
+			JSON.stringify(convexToJson(state.argsForLastResult)) ===
+				JSON.stringify(convexToJson(parseArgs(args)))
+	);
+	const useStale = $derived(!!(options.useResultFromPreviousArguments && state.lastResult));
+	const result = $derived(useStale ? state.lastResult : state.result);
+	const isStale = $derived(useStale && !sameArgs);
+	const data = $derived.by(() => {
+		if (result instanceof Error) {
+			return undefined;
+		}
+		return result;
+	});
+	const error = $derived.by(() => {
+		if (result instanceof Error) {
+			return result;
+		}
+		return undefined;
+	});
+
 	// Cast to promise we're limiting ourselves to sensible values.
-	return returnValue as UseQueryReturn<Query>;
+	return {
+		get data() {
+			return data;
+		},
+		get isLoading() {
+			return data === undefined;
+		},
+		get error() {
+			return error;
+		},
+		get isStale() {
+			return isStale;
+		}
+	} as UseQueryReturn<Query>;
 }
 
 // args can be an object or a closure returning one
