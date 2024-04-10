@@ -1,6 +1,13 @@
 {
-	"name": "demo-convex-svelte",
+	"name": "convex-svelte",
+	"author": "Convex, Inc. <no-reply@convex.dev>",
 	"version": "0.0.1",
+	"license": "Apache-2.0",
+	"homepage": "https://convex.dev",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/get-convex/convex-svelte.git"
+	},
 	"scripts": {
 		"dev": "npm-run-all dev:init --parallel dev:server dev:client",
 		"dev:client": "vite dev --open",

@@ -47,6 +47,9 @@ export function useQuery<Query extends FunctionReference<'query'>>(
 		throw new Error('Query must be a functionReference object, not a string');
 	}
 
+	// TODO make reactive to changes in options? We basically get this for free
+	// but should probably accept a closure.
+
 	// TODO some structural sharing here would be sweet!
 	// The Svelte version of this is diffing the responses and generating
 	// mutations on a reactive object. Is this a good idea?
