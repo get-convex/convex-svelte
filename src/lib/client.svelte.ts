@@ -5,25 +5,19 @@ import { convexToJson, type Value } from 'convex/values';
 
 const _contextKey = '$$_convexClient';
 
-export const getConvexClientContext = (): ConvexClient => {
+export const useConvexClient = (): ConvexClient => {
 	const client = getContext(_contextKey) as ConvexClient | undefined;
 	if (!client) {
 		throw new Error(
 			'No ConvexClient was found in Svelte context. Did you forget to wrap your component with ConvexClientProvider?'
 		);
 	}
-
 	return client;
 };
 
 export const setConvexClientContext = (client: ConvexClient): void => {
 	setContext(_contextKey, client);
 };
-
-export function useConvexClient(): ConvexClient {
-	const queryClient = getConvexClientContext();
-	return queryClient;
-}
 
 type UseQueryOptions = {
 	useResultFromPreviousArguments?: boolean;
@@ -37,10 +31,10 @@ type UseQueryReturn<Query extends FunctionReference<'query'>> =
 // TODO should this thing be a class? that's how state is expressed in the normal world, outside the wackiness of React hooks.
 // Update the arguments somehow?
 // Changes to query and options will not be noticed.
+// Swapping out the ConvexClient used is not supported either.
 /**
- * Note: only reactive with respect to arguments.
- *
- * Args can be a reactive object or a function that returns an object.
+ * Subscribe to a Convex query and return a reactive query object.
+ * Pass in a reactive args object or closure returning to update args reactively.
  *
  * @param query
  * @param args
@@ -52,7 +46,7 @@ export function useQuery<Query extends FunctionReference<'query'>>(
 	args: FunctionArgs<Query> | (() => FunctionArgs<Query>),
 	options: UseQueryOptions = {}
 ): UseQueryReturn<Query> {
-	const client = getConvexClientContext();
+	const client = useConvexClient();
 	if (typeof query === 'string') {
 		throw new Error('Query must be a functionReference object, not a string');
 	}
@@ -89,7 +83,6 @@ export function useQuery<Query extends FunctionReference<'query'>>(
 	// When args change, unsubscribe and resubscribe.
 	$effect(() => {
 		const argsObject = parseArgs(args);
-		// console.log('args must have changed!', argsObject.muteWords);
 		state.data = undefined;
 
 		// Transition to new query
@@ -115,7 +108,6 @@ export function useQuery<Query extends FunctionReference<'query'>>(
 		}
 
 		const unsubscribe = client.onUpdate(query, argsObject, (dataFromServer) => {
-			//console.log('got response from server:', dataFromServer);
 			const copy = structuredClone(dataFromServer);
 
 			// TODO can/should each property be frozen?
@@ -138,37 +130,16 @@ export function useQuery<Query extends FunctionReference<'query'>>(
 		return unsubscribe;
 	});
 
+	// Cast to promise we're limiting ourselves to sensible values.
 	return returnValue as UseQueryReturn<Query>;
 }
 
-/**
- * Validate that the arguments to a Convex function are an object, defaulting
- * `undefined` to `{}`.
- */
-export function parseArgs(
+// args can be an object or a closure returning one
+function parseArgs(
 	args: Record<string, Value> | (() => Record<string, Value>)
 ): Record<string, Value> {
 	if (typeof args === 'function') {
 		args = args();
 	}
-	args = unstate(args);
-	if (!isSimpleObject(args)) {
-		throw new Error(`The arguments to a Convex function must be an object. Received: ${args}`);
-	}
-	return args;
-}
-
-/**
- * Check whether a value is a plain old JavaScript object.
- */
-export function isSimpleObject(value: unknown) {
-	const isObject = typeof value === 'object';
-	const prototype = Object.getPrototypeOf(value);
-	const isSimple =
-		prototype === null ||
-		prototype === Object.prototype ||
-		// Objects generated from other contexts (e.g. across Node.js `vm` modules) will not satisfy the previous
-		// conditions but are still simple objects.
-		prototype?.constructor?.name === 'Object';
-	return isObject && isSimple;
+	return unstate(args);
 }

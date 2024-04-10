@@ -10,13 +10,9 @@
 
 <div class="app">
 	<main>
-		<button on:click={() => (show = !show)}>{show ? 'hide' : 'show'}</button>
-		<!-- unusual to unmount the ConvexProvider, this is just to test the ConvexProvider lifecycle -->
-		{#if show}
-			<ConvexProvider url={env.PUBLIC_CONVEX_URL}>
-				{@render children()}
-			</ConvexProvider>
-		{/if}
+		<ConvexProvider url={env.PUBLIC_CONVEX_URL}>
+			{@render children()}
+		</ConvexProvider>
 	</main>
 
 	<footer>

@@ -6,27 +6,60 @@ Currently exposes a `ConvexProvider` component which takes a Convex deployment U
 
 ### Example
 
+See [+layout.svelte](src/routes/+layout.svelte) for how to wrap your application in a Convex provider component
+```svelte
+<ConvexProvider url={env.PUBLIC_CONVEX_URL}>
+    {@render children()}
+</ConvexProvider>
+```
+
+and [Chat.svelte](src/routes/Chat.svelte) for how to use useQuery
+
+```svelte
+<script>
+const query = useQuery(api.messages.list, () => ({ muteWords: muteWords }), {useResultFromPreviousArguments: true});
+</script>
+...
+{#if query.isLoading}
+    Loading...
+{:else if query.error != null}
+    failed to load: {query.error.toString()}
+{:else}
+    <ul>
+        {#each query.data as message}
+            <li>
+                <span>{message.author}</span>
+                <span>{message.body}</span>
+                <span>{new Date(message._creationTime).toLocaleString()}</span>
+            </li>
+        {/each}
+    </ul>
+{/if}
+```
+
 # SvelteKit Library Instructions
 
 ## Developing
 
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
+Once you've created a project and installed dependencies with `npm install` start a development server:
 
 ```bash
 npm run dev
 ```
 
-Everything inside `src/lib` is part of your library, everything inside `src/routes` can be used as a showcase or preview app.
+This will run you through creating a Convex account and a deployment.
+
+Everything inside `src/lib` is part of the library, everything inside `src/routes` is an example app.
 
 ## Building
 
-To build your library:
+To build the library:
 
 ```bash
 npm run package
 ```
 
-To create a production version of your showcase app:
+To create a production version of the showcase app:
 
 ```bash
 npm run build
