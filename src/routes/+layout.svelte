@@ -1,16 +1,15 @@
 <script lang="ts">
-	import { env } from '$env/dynamic/public';
 	import { PUBLIC_CONVEX_URL } from '$env/static/public';
 	import { ConvexProvider } from '../lib/index.js';
 
 	const { children } = $props();
 	let show = $state(true);
-	console.log('env.PUBLIC_CONVEX_URL', env.PUBLIC_CONVEX_URL);
+	console.log('PUBLIC_CONVEX_URL', PUBLIC_CONVEX_URL);
 </script>
 
 <div class="app">
 	<main>
-		<ConvexProvider url={env.PUBLIC_CONVEX_URL}>
+		<ConvexProvider url={PUBLIC_CONVEX_URL}>
 			{@render children()}
 		</ConvexProvider>
 	</main>
