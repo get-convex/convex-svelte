@@ -1,5 +1,5 @@
 import { getContext, setContext, unstate } from 'svelte';
-import type { ConvexClient } from 'convex/browser';
+import { ConvexClient } from 'convex/browser';
 import type { FunctionReference, FunctionArgs, FunctionReturnType } from 'convex/server';
 import { convexToJson, type Value } from 'convex/values';
 
@@ -9,7 +9,7 @@ export const useConvexClient = (): ConvexClient => {
 	const client = getContext(_contextKey) as ConvexClient | undefined;
 	if (!client) {
 		throw new Error(
-			'No ConvexClient was found in Svelte context. Did you forget to wrap your component with ConvexClientProvider?'
+			'No ConvexClient was found in Svelte context. Did you forget to call setupConvex() in a parent component?'
 		);
 	}
 	return client;
@@ -17,6 +17,21 @@ export const useConvexClient = (): ConvexClient => {
 
 export const setConvexClientContext = (client: ConvexClient): void => {
 	setContext(_contextKey, client);
+};
+
+export const setupConvex = (url: string) => {
+	if (!url || typeof url !== 'string') {
+		throw new Error('Expected string url property for setupConvex');
+	}
+
+	// SvelteKit provides `import { browser } from $app/environment` but this is only
+	// accurate in application code. So use a runtime conditional instead.
+	// https://github.com/sveltejs/kit/issues/5879
+	const isBrowser = typeof window !== 'undefined';
+
+	const client = new ConvexClient(url, { disabled: !isBrowser });
+	setConvexClientContext(client);
+	$effect(() => () => client.close());
 };
 
 type UseQueryOptions = {

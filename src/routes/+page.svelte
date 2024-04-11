@@ -1,8 +1,7 @@
 <script lang="ts">
 	import Chat from './Chat.svelte';
 	import type { PageData } from './$types.js';
-	// Is this really how to
-	let { data = {} as unknown as PageData } = $props();
+	let { data }: { data: PageData } = $props();
 </script>
 
 <svelte:head>

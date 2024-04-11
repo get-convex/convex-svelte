@@ -4,19 +4,25 @@ Convex client for Svelte.
 
 See the [example app live](https://convex-svelte.vercel.app/).
 
-Currently exposes a `ConvexProvider` component which takes a Convex deployment URL, a `useConvexClient()` and a `useQuery()`.
+Currently exposes a `setupConvex()` function which takes a Convex deployment URL,
+a `useConvexClient()` function and a `useQuery()` function.
 
 ### Example
 
-See [+layout.svelte](src/routes/+layout.svelte) for how to wrap your application in a Convex provider component
+Call `setConvex()` in a component above the components that need to Convex queries
+and use `useQuery()` components where you need to listen to the query.
+
+See [+layout.svelte](src/routes/+layout.svelte) for `setupConvex()`
 
 ```svelte
-<ConvexProvider url={PUBLIC_CONVEX_URL}>
-	{@render children()}
-</ConvexProvider>
+<script>
+	import { PUBLIC_CONVEX_URL } from '$env/static/public';
+
+	setupConvex(PUBLIC_CONVEX_URL);
+</script>
 ```
 
-and [Chat.svelte](src/routes/Chat.svelte) for how to use useQuery
+and [Chat.svelte](src/routes/Chat.svelte) for how to use `useQuery()`
 
 ```svelte
 <script>
@@ -44,11 +50,13 @@ and [Chat.svelte](src/routes/Chat.svelte) for how to use useQuery
 
 # Deploying a Svelte App
 
-In production the build command you should use is
+In production build pipelines use the build command
 
 ```bash
 npx convex deploy --cmd-url-env-var-name PUBLIC_CONVEX_URL --cmd 'npm run build'
 ```
+
+to build your Svelte app and deploy Convex functions.
 
 # SvelteKit Library Instructions
 
