@@ -16,7 +16,9 @@
 	let toSend = $state('');
 	let author = $state('me');
 
-	const query = useQuery(api.messages.list, () => ({ muteWords: muteWords }), {useResultFromPreviousArguments: true});
+	const query = useQuery(api.messages.list, () => ({ muteWords: muteWords }), {
+		useResultFromPreviousArguments: true
+	});
 
 	const client = useConvexClient();
 
@@ -27,6 +29,10 @@
 			author: data.author as string,
 			body: data.body as string
 		});
+	}
+
+	function formatDate(ts: number) {
+		return new Date(ts).toLocaleString();
 	}
 </script>
 
@@ -58,7 +64,7 @@
 					<li>
 						<span>{message.author}</span>
 						<span>{message.body}</span>
-						<span>{new Date(message._creationTime).toLocaleString()}</span>
+						<span>{formatDate(message._creationTime)}</span>
 					</li>
 				{/each}
 			</ul>

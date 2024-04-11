@@ -36,7 +36,6 @@ and [Chat.svelte](src/routes/Chat.svelte) for how to use useQuery
 			<li>
 				<span>{message.author}</span>
 				<span>{message.body}</span>
-				<span>{new Date(message._creationTime).toLocaleString()}</span>
 			</li>
 		{/each}
 	</ul>
@@ -45,7 +44,7 @@ and [Chat.svelte](src/routes/Chat.svelte) for how to use useQuery
 
 # Deploying a Svelte App
 
-In production the buidl command you should use is
+In production the build command you should use is
 
 ```bash
 npx convex deploy --cmd-url-env-var-name PUBLIC_CONVEX_URL --cmd 'npm run build'
