@@ -2,6 +2,10 @@
 
 Convex client for Svelte.
 
+```
+npm install convex-svelte
+```
+
 See the [example app live](https://convex-svelte.vercel.app/).
 
 Currently exposes a `setupConvex()` function which takes a Convex deployment URL,
