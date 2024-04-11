@@ -1,3 +1,4 @@
 // Reexport your entry components here
 
-export { useConvexClient, setupConvex } from './client.svelte.js';
+export { useConvexClient, setupConvex, useQuery } from './client.svelte.js';
+
