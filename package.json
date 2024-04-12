@@ -35,7 +35,7 @@
 		"!dist/**/*.spec.*"
 	],
 	"peerDependencies": {
-		"svelte": "^4.0.0",
+		"svelte": "^5.0.0-next.1",
 		"convex": "^1.10.0"
 	},
 	"devDependencies": {
