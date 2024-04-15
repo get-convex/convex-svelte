@@ -47,9 +47,9 @@ type UseQueryReturn<Query extends FunctionReference<'query'>> =
 	| { data: undefined; error: Error; isLoading: false; isStale: boolean }
 	| { data: FunctionReturnType<Query>; error: undefined; isLoading: false; isStale: boolean };
 
-// Note that swapping out the current Convex client is not supported either.
+// Note that swapping out the current Convex client is not supported.
 /**
- * Subscribe to a Convex query and return a reactive query object.
+ * Subscribe to a Convex query and return a reactive query result object.
  * Pass in a reactive args object or a closure returning args to update args reactively.
  *
  * @param query - a FunctionRefernece like `api.dir1.dir2.filename.func`.
@@ -71,10 +71,13 @@ export function useQuery<Query extends FunctionReference<'query'>>(
 		lastResult: FunctionReturnType<Query> | Error | undefined;
 		// The args (query key) of the last result that was received.
 		argsForLastResult: FunctionArgs<Query>;
+		// If the args have never changed, fine to use initialData if provided.
+		haveArgsEverChanged: boolean;
 	} = $state({
 		result: parseOptions(options).initialData,
 		argsForLastResult: undefined,
-		lastResult: undefined
+		lastResult: undefined,
+		haveArgsEverChanged: false
 	});
 
 	// When args change we need to unsubscribe and resubscribe.
@@ -102,13 +105,18 @@ export function useQuery<Query extends FunctionReference<'query'>>(
 
 	// Not reactive
 	const initialArgs = parseArgs(args);
-	let haveArgsEverChanged: boolean = false;
+	// Once args change, move off of initialData.
 	$effect(() => {
-		if (!untrack(() => haveArgsEverChanged)) {
+		if (!untrack(() => state.haveArgsEverChanged)) {
 			if (
 				JSON.stringify(convexToJson(parseArgs(args))) !== JSON.stringify(convexToJson(initialArgs))
 			) {
-				haveArgsEverChanged = true;
+				state.haveArgsEverChanged = true;
+				const opts = parseOptions(options);
+				if (opts.initialData !== undefined) {
+					state.argsForLastResult = unstate(initialArgs);
+					state.lastResult = parseOptions(options).initialData;
+				}
 			}
 		}
 	});
@@ -116,7 +124,7 @@ export function useQuery<Query extends FunctionReference<'query'>>(
 	// This value updates before the effect runs.
 	const syncResult: FunctionReturnType<Query> | undefined = $derived.by(() => {
 		const opts = parseOptions(options);
-		if (opts.initialData && !haveArgsEverChanged) {
+		if (opts.initialData && !state.haveArgsEverChanged) {
 			return state.result;
 		}
 		const value =
