@@ -5,7 +5,7 @@
 
 	const { initialMessages = [] as Doc<'messages'>[] } = $props();
 
-	let messages = $state(initialMessages);
+	let useStale = $state(true);
 	let muteWordsString = $state('');
 	let muteWords = $derived(
 		muteWordsString
@@ -16,9 +16,11 @@
 	let toSend = $state('');
 	let author = $state('me');
 
-	const query = useQuery(api.messages.list, () => ({ muteWords: muteWords }), {
-		useResultFromPreviousArguments: true
-	});
+	const messages = useQuery(
+		api.messages.list,
+		() => ({ muteWords: muteWords }),
+		() => ({ initialData: initialMessages, keepPreviousData: useStale })
+	);
 
 	const client = useConvexClient();
 
@@ -45,22 +47,23 @@
 		placeholder="vim, emacs"
 		bind:value={muteWordsString}
 	/>
-
+	<div>
+		<label for="useStale"> Display old results while loading: </label>
+		<input type="checkbox" id="useStale" name="useStale" bind:checked={useStale} />
+	</div>
 	<form on:submit|preventDefault={onSubmit}>
 		<input type="text" id="author" name="author" bind:value={author} />
 		<input type="text" id="body" name="body" bind:value={toSend} />
-		<!-- TODO the submit button should be disabled if JavaScript is disabled
-		or it should be wired up to a server-side endpoint that calls Convex. -->
 		<button type="submit" disabled={!toSend}>Send</button>
 	</form>
-	{#if query.isLoading}
+	{#if messages.isLoading}
 		Loading...
-	{:else if query.error != null}
+	{:else if messages.error}
 		failed to load
 	{:else}
-		<ul class="messages" class:stale={query.isStale}>
+		<ul class="messages" class:stale={messages.isStale}>
 			<ul>
-				{#each query.data as message}
+				{#each messages.data as message}
 					<li>
 						<span>{message.author}</span>
 						<span>{message.body}</span>
@@ -84,7 +87,7 @@
 	}
 
 	.stale {
-		color: darkgray;
+		color: rgba(0, 0, 0, 0.8);
 	}
 
 	ul {

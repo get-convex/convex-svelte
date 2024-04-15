@@ -1,4 +1,4 @@
-import { getContext, setContext, unstate } from 'svelte';
+import { getContext, setContext, unstate, untrack } from 'svelte';
 import { ConvexClient } from 'convex/browser';
 import {
 	type FunctionReference,
@@ -30,17 +30,16 @@ export const setupConvex = (url: string) => {
 		throw new Error('Expected string url property for setupConvex');
 	}
 
-	// SvelteKit provides `import { browser } from $app/environment` but this is only
-	// accurate in application code. So use a runtime conditional instead.
-	const isBrowser = BROWSER;
-
-	const client = new ConvexClient(url, { disabled: !isBrowser });
+	const client = new ConvexClient(url, { disabled: !BROWSER });
 	setConvexClientContext(client);
 	$effect(() => () => client.close());
 };
 
-type UseQueryOptions = {
-	useResultFromPreviousArguments?: boolean;
+type UseQueryOptions<Query extends FunctionReference<'query'>> = {
+	// Use this data and assume it is up to date (typically for SSR and hydration)
+	initialData?: FunctionReturnType<Query>;
+	// Instead of loading, render result from outdated args
+	keepPreviousData?: boolean;
 };
 
 type UseQueryReturn<Query extends FunctionReference<'query'>> =
@@ -51,7 +50,7 @@ type UseQueryReturn<Query extends FunctionReference<'query'>> =
 // Note that swapping out the current Convex client is not supported either.
 /**
  * Subscribe to a Convex query and return a reactive query object.
- * Pass in a reactive args object or closure returning to update args reactively.
+ * Pass in a reactive args object or a closure returning args to update args reactively.
  *
  * @param query - a FunctionRefernece like `api.dir1.dir2.filename.func`.
  * @param args - The arguments to the query function.
@@ -60,29 +59,20 @@ type UseQueryReturn<Query extends FunctionReference<'query'>> =
 export function useQuery<Query extends FunctionReference<'query'>>(
 	query: Query,
 	args: FunctionArgs<Query> | (() => FunctionArgs<Query>),
-	options: UseQueryOptions = {}
+	options: UseQueryOptions<Query> | (() => UseQueryOptions<Query>) = {}
 ): UseQueryReturn<Query> {
 	const client = useConvexClient();
 	if (typeof query === 'string') {
 		throw new Error('Query must be a functionReference object, not a string');
 	}
-
-	// TODO make reactive to changes in options? We basically get this for free
-	// but should probably accept a closure.
-
-	// TODO some structural sharing here would be sweet!
-	// The Svelte version of this is diffing the responses and generating
-	// mutations on a reactive object. Is this a good idea?
-
 	const state: {
-		// The
 		result: FunctionReturnType<Query> | Error | undefined;
 		// The last result we actually received, if this query has ever received one.
 		lastResult: FunctionReturnType<Query> | Error | undefined;
 		// The args (query key) of the last result that was received.
 		argsForLastResult: FunctionArgs<Query>;
 	} = $state({
-		result: undefined,
+		result: parseOptions(options).initialData,
 		argsForLastResult: undefined,
 		lastResult: undefined
 	});
@@ -108,17 +98,40 @@ export function useQuery<Query extends FunctionReference<'query'>>(
 			JSON.stringify(convexToJson(state.argsForLastResult)) ===
 				JSON.stringify(convexToJson(parseArgs(args)))
 	);
-	const staleAllowed = $derived(!!(options.useResultFromPreviousArguments && state.lastResult));
+	const staleAllowed = $derived(!!(parseOptions(options).keepPreviousData && state.lastResult));
+
+	// Not reactive
+	const initialArgs = parseArgs(args);
+	let haveArgsEverChanged: boolean = false;
+	$effect(() => {
+		if (!untrack(() => haveArgsEverChanged)) {
+			if (
+				JSON.stringify(convexToJson(parseArgs(args))) !== JSON.stringify(convexToJson(initialArgs))
+			) {
+				haveArgsEverChanged = true;
+			}
+		}
+	});
 
 	// This value updates before the effect runs.
-	const syncResult: FunctionReturnType<Query> | undefined = $derived(
-		!client.disabled && client.client.localQueryResult(getFunctionName(query), parseArgs(args))
-	);
+	const syncResult: FunctionReturnType<Query> | undefined = $derived.by(() => {
+		const opts = parseOptions(options);
+		if (opts.initialData && !haveArgsEverChanged) {
+			return state.result;
+		}
+		const value =
+			!client.disabled && client.client.localQueryResult(getFunctionName(query), parseArgs(args));
+		// If state result has updated then it's time to check the for a new local value
+		state.result;
+		return value;
+	});
 
 	const result = $derived(
 		syncResult !== undefined ? syncResult : staleAllowed ? state.lastResult : undefined
 	);
-	const isStale = $derived(syncResult === undefined && staleAllowed && !sameArgsAsLastResult);
+	const isStale = $derived(
+		syncResult === undefined && staleAllowed && !sameArgsAsLastResult && result !== undefined
+	);
 	const data = $derived.by(() => {
 		if (result instanceof Error) {
 			return undefined;
@@ -157,4 +170,14 @@ function parseArgs(
 		args = args();
 	}
 	return unstate(args);
+}
+
+// options can be an object or a closure
+function parseOptions<Query extends FunctionReference<'query'>>(
+	options: UseQueryOptions<Query> | (() => UseQueryOptions<Query>)
+): UseQueryOptions<Query> {
+	if (typeof options === 'function') {
+		options = options();
+	}
+	return unstate(options);
 }
