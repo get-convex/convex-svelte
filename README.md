@@ -6,10 +6,14 @@ Convex client for Svelte.
 npm install convex-svelte
 ```
 
+to install it and run `npx convex init` to get started with Convex.
+
 See the [example app live](https://convex-svelte.vercel.app/).
 
-Currently exposes a `setupConvex()` function which takes a Convex deployment URL,
-a `useConvexClient()` function and a `useQuery()` function.
+`convex-svelte` provides a `setupConvex()` function which takes a Convex deployment URL,
+a `useConvexClient()` which returns a [ConvexClient](https://docs.convex.dev/api/classes/browser.ConvexClient)
+used to set authentication credentials and run Convex mutations and actions,
+and a `useQuery()` function for subscribing to Convex queries.
 
 ### Example
 
@@ -52,7 +56,16 @@ and [Chat.svelte](src/routes/Chat.svelte) for how to use `useQuery()`
 {/if}
 ```
 
-# Deploying a Svelte App
+Running a mutation looks like
+
+```svelte
+const client = useConvexClient();
+...
+// usually wired up to a button or form
+client.mutation(api.messages.send, { author: "me", body: "hello!" });
+```
+
+### Deploying a Svelte App
 
 In production build pipelines use the build command
 
@@ -62,11 +75,9 @@ npx convex deploy --cmd-url-env-var-name PUBLIC_CONVEX_URL --cmd 'npm run build'
 
 to build your Svelte app and deploy Convex functions.
 
-# SvelteKit Library Instructions
+# Trying out this library
 
-## Developing
-
-Once you've created a project and installed dependencies with `npm install` start a development server:
+Clone this repo and install dependencies with `npm install` then start a development server:
 
 ```bash
 npm run dev
@@ -76,7 +87,7 @@ This will run you through creating a Convex account and a deployment.
 
 Everything inside `src/lib` is part of the library, everything inside `src/routes` is an example app.
 
-## Building
+# Developing this library
 
 To build the library:
 
