@@ -1,7 +1,13 @@
 import { getContext, setContext, unstate } from 'svelte';
 import { ConvexClient } from 'convex/browser';
-import type { FunctionReference, FunctionArgs, FunctionReturnType } from 'convex/server';
+import {
+	type FunctionReference,
+	type FunctionArgs,
+	type FunctionReturnType,
+	getFunctionName
+} from 'convex/server';
 import { convexToJson, type Value } from 'convex/values';
+import { BROWSER } from 'esm-env';
 
 const _contextKey = '$$_convexClient';
 
@@ -26,8 +32,7 @@ export const setupConvex = (url: string) => {
 
 	// SvelteKit provides `import { browser } from $app/environment` but this is only
 	// accurate in application code. So use a runtime conditional instead.
-	// https://github.com/sveltejs/kit/issues/5879
-	const isBrowser = typeof window !== 'undefined';
+	const isBrowser = BROWSER;
 
 	const client = new ConvexClient(url, { disabled: !isBrowser });
 	setConvexClientContext(client);
@@ -70,26 +75,26 @@ export function useQuery<Query extends FunctionReference<'query'>>(
 	// mutations on a reactive object. Is this a good idea?
 
 	const state: {
+		// The
 		result: FunctionReturnType<Query> | Error | undefined;
-		argsForLastResult: FunctionArgs<Query>;
+		// The last result we actually received, if this query has ever received one.
 		lastResult: FunctionReturnType<Query> | Error | undefined;
+		// The args (query key) of the last result that was received.
+		argsForLastResult: FunctionArgs<Query>;
 	} = $state({
 		result: undefined,
 		argsForLastResult: undefined,
 		lastResult: undefined
 	});
 
-	// When args change, unsubscribe and resubscribe.
+	// When args change we need to unsubscribe and resubscribe.
 	$effect(() => {
 		const argsObject = parseArgs(args);
-		state.result = undefined;
-
 		const unsubscribe = client.onUpdate(query, argsObject, (dataFromServer) => {
-			// TODO is this helpful? (saving the original from being made reactive)
+			// TODO is this helpful? (preventing the original from being made reactive)
 			// (note we're potentially copying error objects here)
 			const copy = structuredClone(dataFromServer);
 
-			// TODO can/should each property be frozen?
 			state.result = copy;
 			state.argsForLastResult = argsObject;
 			state.lastResult = copy;
@@ -97,14 +102,23 @@ export function useQuery<Query extends FunctionReference<'query'>>(
 		return unsubscribe;
 	});
 
-	const sameArgs = $derived(
+	// Are the args (the query key) the same as the last args we received a result for?
+	const sameArgsAsLastResult = $derived(
 		!!state.argsForLastResult &&
 			JSON.stringify(convexToJson(state.argsForLastResult)) ===
 				JSON.stringify(convexToJson(parseArgs(args)))
 	);
-	const useStale = $derived(!!(options.useResultFromPreviousArguments && state.lastResult));
-	const result = $derived(useStale ? state.lastResult : state.result);
-	const isStale = $derived(useStale && !sameArgs);
+	const staleAllowed = $derived(!!(options.useResultFromPreviousArguments && state.lastResult));
+
+	// This value updates before the effect runs.
+	const syncResult: FunctionReturnType<Query> | undefined = $derived(
+		!client.disabled && client.client.localQueryResult(getFunctionName(query), parseArgs(args))
+	);
+
+	const result = $derived(
+		syncResult !== undefined ? syncResult : staleAllowed ? state.lastResult : undefined
+	);
+	const isStale = $derived(syncResult === undefined && staleAllowed && !sameArgsAsLastResult);
 	const data = $derived.by(() => {
 		if (result instanceof Error) {
 			return undefined;
@@ -118,7 +132,7 @@ export function useQuery<Query extends FunctionReference<'query'>>(
 		return undefined;
 	});
 
-	// Cast to promise we're limiting ourselves to sensible values.
+	// This TypeScript cast makes data not undefined if error and isLoading are checked first.
 	return {
 		get data() {
 			return data;
