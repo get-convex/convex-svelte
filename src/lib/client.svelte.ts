@@ -50,10 +50,11 @@ type UseQueryReturn<Query extends FunctionReference<'query'>> =
 // Note that swapping out the current Convex client is not supported.
 /**
  * Subscribe to a Convex query and return a reactive query result object.
- * Pass in a reactive args object or a closure returning args to update args reactively.
+ * Pass reactive args object or a closure returning args to update args reactively.
  *
  * @param query - a FunctionRefernece like `api.dir1.dir2.filename.func`.
  * @param args - The arguments to the query function.
+ * @param options - UseQueryOptions like `initialData` and `keepPreviousData`.
  * @returns an object containing data, isLoading, error, and isStale.
  */
 export function useQuery<Query extends FunctionReference<'query'>>(
