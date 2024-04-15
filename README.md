@@ -59,10 +59,26 @@ and [Chat.svelte](src/routes/Chat.svelte) for how to use `useQuery()`
 Running a mutation looks like
 
 ```svelte
-const client = useConvexClient();
-...
-// usually wired up to a button or form
-client.mutation(api.messages.send, { author: "me", body: "hello!" });
+<script>
+	const client = useConvexClient();
+
+	let toSend = $state('');
+	let author = $state('me');
+
+	function onSubmit(e: SubmitEvent) {
+		const data = Object.fromEntries(new FormData(e.target as HTMLFormElement).entries());
+		client.mutation(api.messages.send, {
+			author: data.author as string,
+			body: data.body as string
+		});
+	}
+</script>
+
+<form on:submit|preventDefault={onSubmit}>
+	<input type="text" id="author" name="author" />
+	<input type="text" id="body" name="body" bind:value={toSend} />
+	<button type="submit" disabled={!toSend}>Send</button>
+</form>
 ```
 
 ### Deploying a Svelte App
