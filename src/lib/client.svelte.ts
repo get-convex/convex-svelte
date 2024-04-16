@@ -1,4 +1,4 @@
-import { getContext, setContext, unstate, untrack } from 'svelte';
+import { getContext, setContext, untrack } from 'svelte';
 import { ConvexClient } from 'convex/browser';
 import {
 	type FunctionReference,
@@ -115,7 +115,7 @@ export function useQuery<Query extends FunctionReference<'query'>>(
 				state.haveArgsEverChanged = true;
 				const opts = parseOptions(options);
 				if (opts.initialData !== undefined) {
-					state.argsForLastResult = unstate(initialArgs);
+					state.argsForLastResult = $state.snapshot(initialArgs);
 					state.lastResult = parseOptions(options).initialData;
 				}
 			}
@@ -178,7 +178,7 @@ function parseArgs(
 	if (typeof args === 'function') {
 		args = args();
 	}
-	return unstate(args);
+	return $state.snapshot(args);
 }
 
 // options can be an object or a closure
@@ -188,5 +188,5 @@ function parseOptions<Query extends FunctionReference<'query'>>(
 	if (typeof options === 'function') {
 		options = options();
 	}
-	return unstate(options);
+	return $state.snapshot(options);
 }
