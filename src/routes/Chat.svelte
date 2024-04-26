@@ -13,14 +13,6 @@
 			.map((x) => x.trim())
 			.filter((x) => x)
 	);
-	let toSend = $state('');
-	let author = $state('me');
-
-	const messages = useQuery(
-		api.messages.list,
-		() => ({ muteWords: muteWords }),
-		() => ({ initialData: initialMessages, keepPreviousData: useStale })
-	);
 
 	const client = useConvexClient();
 
@@ -36,6 +28,12 @@
 	function formatDate(ts: number) {
 		return new Date(ts).toLocaleString();
 	}
+
+	let toSend = $state('');
+	let author = $state('me');
+
+	const messages = useQuery(api.messages.list, {});
+
 </script>
 
 <div class="chat">
@@ -51,11 +49,12 @@
 		<label for="useStale"> Display old results while loading: </label>
 		<input type="checkbox" id="useStale" name="useStale" bind:checked={useStale} />
 	</div>
-	<form on:submit|preventDefault={onSubmit}>
+	<form onsubmit={onSubmit}>
 		<input type="text" id="author" name="author" bind:value={author} />
 		<input type="text" id="body" name="body" bind:value={toSend} />
 		<button type="submit" disabled={!toSend}>Send</button>
 	</form>
+
 	{#if messages.isLoading}
 		Loading...
 	{:else if messages.error}

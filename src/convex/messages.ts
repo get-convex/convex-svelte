@@ -2,7 +2,7 @@ import { v } from 'convex/values';
 import { query, mutation, internalMutation } from './_generated/server.js';
 import type { Doc } from './_generated/dataModel.js';
 
-export const list = query(async (ctx, { muteWords = [] }: { muteWords: string[] }) => {
+export const list = query(async (ctx, { muteWords = [] }: { muteWords?: string[] }) => {
 	const messages = await ctx.db.query('messages').collect();
 	const filteredMessages = messages.filter(
 		({ body }) => !muteWords.some((word) => body.toLowerCase().includes(word.toLowerCase()))

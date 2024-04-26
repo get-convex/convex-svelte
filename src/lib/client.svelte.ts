@@ -81,12 +81,12 @@ export function useQuery<Query extends FunctionReference<'query'>>(
 		haveArgsEverChanged: false
 	});
 
-	// When args change we need to unsubscribe and resubscribe.
+	// When args change we need to unsubscribe to the old query and subscribe
+	// to the new one.
 	$effect(() => {
 		const argsObject = parseArgs(args);
 		const unsubscribe = client.onUpdate(query, argsObject, (dataFromServer) => {
-			// TODO is this helpful? (preventing the original from being made reactive)
-			// (note we're potentially copying error objects here)
+			// Note that we're potentially copying error objects here.
 			const copy = structuredClone(dataFromServer);
 
 			state.result = copy;
