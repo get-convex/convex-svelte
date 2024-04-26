@@ -13,6 +13,14 @@
 			.map((x) => x.trim())
 			.filter((x) => x)
 	);
+	let toSend = $state('');
+	let author = $state('me');
+
+	const messages = useQuery(
+		api.messages.list,
+		() => ({ muteWords: muteWords }),
+		() => ({ initialData: initialMessages, keepPreviousData: useStale })
+	);
 
 	const client = useConvexClient();
 
@@ -28,12 +36,6 @@
 	function formatDate(ts: number) {
 		return new Date(ts).toLocaleString();
 	}
-
-	let toSend = $state('');
-	let author = $state('me');
-
-	const messages = useQuery(api.messages.list, {});
-
 </script>
 
 <div class="chat">
