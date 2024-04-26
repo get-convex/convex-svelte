@@ -1,6 +1,6 @@
 [Convex](https://www.convex.dev/) is the typesafe backend-as-a-service with realtime updates, server functions, crons and scheduled jobs, file storage, vector search, and more.
 
-Visit https://docs.convex.dev to get started.
+[Quickstart](https://docs.convex.dev/quickstart/svelte)
 
 # convex-svelte
 
