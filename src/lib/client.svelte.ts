@@ -1,5 +1,5 @@
 import { getContext, setContext, untrack } from 'svelte';
-import { ConvexClient } from 'convex/browser';
+import { ConvexClient, type ConvexClientOptions } from 'convex/browser';
 import {
 	type FunctionReference,
 	type FunctionArgs,
@@ -25,12 +25,13 @@ export const setConvexClientContext = (client: ConvexClient): void => {
 	setContext(_contextKey, client);
 };
 
-export const setupConvex = (url: string) => {
+export const setupConvex = (url: string, options?: ConvexClientOptions = {}) => {
 	if (!url || typeof url !== 'string') {
 		throw new Error('Expected string url property for setupConvex');
 	}
+	const optionsWithDefaults = { disabled: !BROWSER, ...options };
 
-	const client = new ConvexClient(url, { disabled: !BROWSER });
+	const client = new ConvexClient(url, optionsWithDefaults);
 	setConvexClientContext(client);
 	$effect(() => () => client.close());
 };
