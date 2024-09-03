@@ -1,11 +1,8 @@
-import { ConvexHttpClient } from 'convex/browser';
-import type { PageServerLoad } from './$types.js';
-import { PUBLIC_CONVEX_URL } from '$env/static/public';
 import { api } from '../convex/_generated/api.js';
+import type { PageServerLoad } from './$types.js';
 
-export const load = (async () => {
-	const client = new ConvexHttpClient(PUBLIC_CONVEX_URL!);
+export const load = (async ({ locals: { convex } }) => {
 	return {
-		messages: await client.query(api.messages.list, { muteWords: [] })
+		messages: await convex.query(api.messages.list, { muteWords: [] })
 	};
 }) satisfies PageServerLoad;
