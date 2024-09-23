@@ -21,7 +21,10 @@
 		() => ({ muteWords: muteWords }),
 		() => ({ initialData: initialMessages, keepPreviousData: useStale })
 	);
-
+	const foo = useQuery(
+		api.messages.error,
+		{}
+	)
 	const client = useConvexClient();
 
 	function onSubmit(e: SubmitEvent) {
@@ -56,6 +59,14 @@
 		<input type="text" id="body" name="body" bind:value={toSend} />
 		<button type="submit" disabled={!toSend}>Send</button>
 	</form>
+
+	{#if foo.isLoading}
+		Foo is loading...
+	{:else if foo.error}
+		failed to load: {foo.error.data}
+	{:else}
+	        succeeded (?)
+	{/if}
 
 	{#if messages.isLoading}
 		Loading...
