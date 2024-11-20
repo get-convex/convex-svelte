@@ -1,0 +1,6 @@
+{
+  "startCommand": "cp .env.local.example .env.local && npm run dev:client",
+  "env": {
+    "PUBLIC_CONVEX_URL": "https://clever-gnat-613.convex.cloud"
+  }
+}
