@@ -1,7 +1,7 @@
 {
 	"name": "convex-svelte",
 	"author": "Convex, Inc. <no-reply@convex.dev>",
-	"version": "0.0.9",
+	"version": "0.0.10",
 	"license": "Apache-2.0",
 	"homepage": "https://convex.dev",
 	"repository": {
