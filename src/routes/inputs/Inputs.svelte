@@ -72,11 +72,20 @@
 		</div>
 
 		<div>
-			<p>Current values:</p>
+			<p>Local values:</p>
 			<ul>
 				<li>a: {numbers.a}</li>
 				<li>b: {numbers.b}</li>
 				<li>c: {numbers.c}</li>
+			</ul>
+		</div>
+
+		<div>
+			<p>Server values:</p>
+			<ul>
+				<li>a: {serverNumbers.data.a}</li>
+				<li>b: {serverNumbers.data.b}</li>
+				<li>c: {serverNumbers.data.c}</li>
 			</ul>
 		</div>
 	{/if}
