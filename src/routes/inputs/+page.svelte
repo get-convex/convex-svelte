@@ -11,7 +11,7 @@
 	<h1>Modifying several inputs</h1>
 	<p>Any user have complete control over these inputs but might change them quickly.</p>
 
-	<Inputs/>
+	<Inputs />
 </section>
 
 <style>
