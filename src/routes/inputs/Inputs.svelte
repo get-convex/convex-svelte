@@ -6,114 +6,78 @@
 	const convex = useConvexClient();
 	const serverNumbers = useQuery(api.numbers.get, {});
 
-	let numbers = $state({ a: 0, b: 0, c: 0 });
-	let pendingMutations = $state(0);
-	let lastMutationPromise: Promise<any> | null = $state(null);
-	let hasUnsentChanges = $state(false);  // Track if we have changes waiting in debounce
+	let numbers = $state(null);
+	// Have some changes not yet been sent?
+	let hasUnsentChanges = $state(false);
+	// Does delivered server state not yet reflect all local changes?
+	let hasUnsavedChanges = $state(false);
+	let mutationInFlight = $state(false);
 
-	// Stay in sync with server data only when no mutations are pending and there are now changes waiting to be sent
+	// Initialize local state when server data first arrives
 	$effect(() => {
-	    if (!serverNumbers.isLoading && serverNumbers.data && 
-		pendingMutations === 0 && !hasUnsentChanges) {
-		console.log('Received data from server');
-		numbers.a = serverNumbers.data.a;
-		numbers.b = serverNumbers.data.b;
-		numbers.c = serverNumbers.data.c;
-	    }
+		if (!serverNumbers.isLoading && serverNumbers.data && !numbers) {
+			numbers = { ...serverNumbers.data };
+		}
 	});
 
-	// Queue updates and track pending mutations
-	async function queueMutation() {
-	    if (serverNumbers.isLoading) return;
-
-	    pendingMutations++;
-	    hasUnsentChanges = false;
-
-	    console.log('Updating server...', pendingMutations, 'mutations pending');
-	    const currentMutation = convex.mutation(api.numbers.update, {
-		a: numbers.a,
-		b: numbers.b,
-		c: numbers.c
-	    });
-
-	    lastMutationPromise = currentMutation;
-
-	    try {
-		await currentMutation;
-		console.log('saved to server');
-	    } finally {
-		pendingMutations--;
-		
-		// If this was the last mutation in the queue,
-		// explicitly sync with server state
-		if (pendingMutations === 0 && !hasUnsentChanges && 
-		    serverNumbers.data && currentMutation === lastMutationPromise) {
-		    console.log('finished persisting state to server, back to following useQuery');
-		    numbers.a = serverNumbers.data.a;
-		    numbers.b = serverNumbers.data.b;
-		    numbers.c = serverNumbers.data.c;
+	// Update local state with server data
+	$effect(() => {
+		if (!hasUnsavedChanges && !serverNumbers.isLoading && serverNumbers.data) {
+			numbers = { ...serverNumbers.data };
 		}
-	    }
+	});
+
+	async function publishChanges() {
+		hasUnsentChanges = true;
+		hasUnsavedChanges = true;
+		if (!numbers || mutationInFlight) return;
+
+		hasUnsentChanges = false;
+		mutationInFlight = true;
+		await convex.mutation(api.numbers.update, numbers);
+		mutationInFlight = false;
+
+		if (hasUnsentChanges) {
+			publishChanges();
+		} else {
+			hasUnsavedChanges = false;
+		}
 	}
 
-	// Track changes immediately but debounce the actual mutation
-	let updateTimeout: number | undefined;
-	$effect(() => {
-	    // reference values so this is reactive on them
-	    const currentValues = {
-		a: numbers.a,
-		b: numbers.b,
-		c: numbers.c
-	    };
-	    hasUnsentChanges = true;
-	    
-	    clearTimeout(updateTimeout);
-	    updateTimeout = setTimeout(queueMutation, 500) as unknown as number;
-
-	    return () => clearTimeout(updateTimeout);
-	});
+	function handleNumericInput(prop, e) {
+		numbers[prop] = e.currentTarget.valueAsNumber;
+		publishChanges();
+	}
 </script>
 
 <div class="numbers">
-    {#if serverNumbers.isLoading}
-        <div>
-            <p>Loading values...</p>
-        </div>
-    {:else}
-        <div>
-            <label for="a">Number a:</label>
-            <input 
-                id="a"
-                type="number"
-                bind:value={numbers.a}
-            />
-        </div>
+	{#if serverNumbers.isLoading || !numbers}
+		<div>
+			<p>Loading values...</p>
+		</div>
+	{:else}
+		<div>
+			<label for="a">Number a:</label>
+			<input id="a" type="number" oninput={(e) => handleNumericInput('a', e)} value={numbers.a} />
+		</div>
 
-        <div>
-            <label for="b">Number b:</label>
-            <input 
-                id="b"
-                type="number"
-                bind:value={numbers.b}
-            />
-        </div>
+		<div>
+			<label for="b">Number b:</label>
+			<input id="b" type="number" oninput={(e) => handleNumericInput('b', e)} value={numbers.b} />
+		</div>
 
-        <div>
-            <label for="c">Number c:</label>
-            <input 
-                id="c"
-                type="number"
-                bind:value={numbers.c}
-            />
-        </div>
+		<div>
+			<label for="c">Number c:</label>
+			<input id="c" type="number" oninput={(e) => handleNumericInput('c', e)} value={numbers.c} />
+		</div>
 
-        <div>
-            <p>Current values:</p>
-            <ul>
-                <li>a: {numbers.a}</li>
-                <li>b: {numbers.b}</li>
-                <li>c: {numbers.c}</li>
-            </ul>
-        </div>
-    {/if}
+		<div>
+			<p>Current values:</p>
+			<ul>
+				<li>a: {numbers.a}</li>
+				<li>b: {numbers.b}</li>
+				<li>c: {numbers.c}</li>
+			</ul>
+		</div>
+	{/if}
 </div>
