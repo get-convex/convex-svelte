@@ -1,87 +1,58 @@
 <script lang="ts">
-	import { useQuery, useConvexClient } from '$lib/client.svelte.js';
-	import type { Doc } from '../../convex/_generated/dataModel.js';
-	import { api } from '../../convex/_generated/api.js';
+import { useQuery, useConvexClient } from '$lib/client.svelte.js';
+import type { Doc } from '../../convex/_generated/dataModel.js';
+import { api } from '../../convex/_generated/api.js';
 
-	const convex = useConvexClient();
-	const serverNumbers = useQuery(api.numbers.get, {});
+const convex = useConvexClient();
+const serverNumbers = useQuery(api.numbers.get, {});
 
-	let numbers = $state(serverNumbers.isLoading ? {} : { a: serverNumbers.a, b: serverNumbers.b, c: serverNumbers.c });
-	let pendingMutations = $state(0);
-	let lastMutationPromise: Promise<any> | null = $state(null);
-	let hasUnsentChanges = $state(false);  // Track if we have changes waiting in debounce
+let numbers = $state(null);
+// Have some changes not yet been sent?
+let hasUnsentChanges = $state(false);
+// Does delivered server state not yet reflect all local changes?
+let hasUnsavedChanges = $state(false);
+let mutationInFlight = $state(false);
 
-	// Stay in sync with server data only when no mutations are pending and there are now changes waiting to be sent
-	$effect(() => {
-	    if (!serverNumbers.isLoading && serverNumbers.data && 
-		pendingMutations === 0 && !hasUnsentChanges) {
-		console.log('Received data from server:', {
-		    a: serverNumbers.data.a,
-		    b: serverNumbers.data.b,
-		    c: serverNumbers.data.c,
-		});
-		numbers.a = serverNumbers.data.a;
-		numbers.b = serverNumbers.data.b;
-		numbers.c = serverNumbers.data.c;
-	    }
-	});
+// Initialize local state when server data first arrives
+$effect(() => {
+    if (!serverNumbers.isLoading && serverNumbers.data && !numbers) {
+        numbers = { ...serverNumbers.data };
+    }
+});
 
-	// Queue updates and track pending mutations
-	async function queueMutation() {
-	    if (serverNumbers.isLoading) return;
+// Update local state with server data
+$effect(() => {
+    if (!hasUnsavedChanges && !serverNumbers.isLoading && serverNumbers.data) {
+        numbers = { ...serverNumbers.data };
+    }
+});
 
-	    pendingMutations++;
-	    hasUnsentChanges = false;
+async function publishChanges() {
+    hasUnsentChanges = true;
+    hasUnsavedChanges = true;
+    if (!numbers || mutationInFlight) return;
 
-	    console.log('Updating server with', numbers, pendingMutations, 'mutations pending');
-	    const currentMutation = convex.mutation(api.numbers.update, {
-		a: numbers.a,
-		b: numbers.b,
-		c: numbers.c
-	    });
+    hasUnsentChanges = false;
+    mutationInFlight = true
+    await convex.mutation(api.numbers.update, numbers);
+    mutationInFlight = false
 
-	    lastMutationPromise = currentMutation;
+    if (hasUnsentChanges) {
+	publishChanges();
+    } else {
+	hasUnsavedChanges = false;
+    }
+}
 
-	    try {
-		await currentMutation;
-		console.log('saved to server');
-	    } finally {
-		pendingMutations--;
-		
-		// If this was the last mutation in the queue,
-		// explicitly sync with server state
-		if (pendingMutations === 0 && !hasUnsentChanges && 
-		    serverNumbers.data && currentMutation === lastMutationPromise) {
-		    console.log('finished persisting state to server, back to following useQuery');
-		    numbers.a = serverNumbers.data.a;
-		    numbers.b = serverNumbers.data.b;
-		    numbers.c = serverNumbers.data.c;
-		}
-	    }
-	}
+function handleNumericInput(prop, e) {
+    numbers[prop] = e.currentTarget.valueAsNumber
+    publishChanges();
+};
 
-	// Track changes immediately but debounce the actual mutation
-	let updateTimeout: number | undefined;
-	$effect(() => {
-           if (serverNumbers.isLoading) return;
-
-	    // reference values so this is reactive on them
-	    const currentValues = {
-		a: numbers.a,
-		b: numbers.b,
-		c: numbers.c
-	    };
-	    hasUnsentChanges = true;
-	    
-	    clearTimeout(updateTimeout);
-	    updateTimeout = setTimeout(queueMutation, 500) as unknown as number;
-
-	    return () => clearTimeout(updateTimeout);
-	});
 </script>
 
 <div class="numbers">
-    {#if serverNumbers.isLoading}
+    {#if serverNumbers.isLoading || !numbers}
         <div>
             <p>Loading values...</p>
         </div>
@@ -91,7 +62,8 @@
             <input 
                 id="a"
                 type="number"
-                bind:value={numbers.a}
+		oninput={(e) => handleNumericInput('a', e)}
+		value={numbers.a}
             />
         </div>
 
@@ -100,7 +72,8 @@
             <input 
                 id="b"
                 type="number"
-                bind:value={numbers.b}
+		oninput={(e) => handleNumericInput('b', e)}
+		value={numbers.b}
             />
         </div>
 
@@ -109,7 +82,8 @@
             <input 
                 id="c"
                 type="number"
-                bind:value={numbers.c}
+		oninput={(e) => handleNumericInput('c', e)}
+		value={numbers.c}
             />
         </div>
 
