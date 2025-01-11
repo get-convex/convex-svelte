@@ -6,7 +6,7 @@
 	const convex = useConvexClient();
 	const serverNumbers = useQuery(api.numbers.get, {});
 
-	let numbers = $state({ a: 0, b: 0, c: 0 });
+	let numbers = $state(serverNumbers.isLoading ? {} : { a: serverNumbers.a, b: serverNumbers.b, c: serverNumbers.c });
 	let pendingMutations = $state(0);
 	let lastMutationPromise: Promise<any> | null = $state(null);
 	let hasUnsentChanges = $state(false);  // Track if we have changes waiting in debounce
@@ -15,7 +15,11 @@
 	$effect(() => {
 	    if (!serverNumbers.isLoading && serverNumbers.data && 
 		pendingMutations === 0 && !hasUnsentChanges) {
-		console.log('Received data from server');
+		console.log('Received data from server:', {
+		    a: serverNumbers.data.a,
+		    b: serverNumbers.data.b,
+		    c: serverNumbers.data.c,
+		});
 		numbers.a = serverNumbers.data.a;
 		numbers.b = serverNumbers.data.b;
 		numbers.c = serverNumbers.data.c;
@@ -29,7 +33,7 @@
 	    pendingMutations++;
 	    hasUnsentChanges = false;
 
-	    console.log('Updating server...', pendingMutations, 'mutations pending');
+	    console.log('Updating server with', numbers, pendingMutations, 'mutations pending');
 	    const currentMutation = convex.mutation(api.numbers.update, {
 		a: numbers.a,
 		b: numbers.b,
@@ -59,6 +63,8 @@
 	// Track changes immediately but debounce the actual mutation
 	let updateTimeout: number | undefined;
 	$effect(() => {
+           if (serverNumbers.isLoading) return;
+
 	    // reference values so this is reactive on them
 	    const currentValues = {
 		a: numbers.a,
