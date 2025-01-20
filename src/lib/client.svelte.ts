@@ -25,7 +25,7 @@ export const setConvexClientContext = (client: ConvexClient): void => {
 	setContext(_contextKey, client);
 };
 
-export const setupConvex = (url: string, options?: ConvexClientOptions = {}) => {
+export const setupConvex = (url: string, options: ConvexClientOptions = {}) => {
 	if (!url || typeof url !== 'string') {
 		throw new Error('Expected string url property for setupConvex');
 	}
@@ -86,14 +86,24 @@ export function useQuery<Query extends FunctionReference<'query'>>(
 	// to the new one.
 	$effect(() => {
 		const argsObject = parseArgs(args);
-		const unsubscribe = client.onUpdate(query, argsObject, (dataFromServer) => {
-			// Note that we're potentially copying error objects here.
-			const copy = structuredClone(dataFromServer);
+		const unsubscribe = client.onUpdate(
+			query,
+			argsObject,
+			(dataFromServer) => {
+				const copy = structuredClone(dataFromServer);
 
-			state.result = copy;
-			state.argsForLastResult = argsObject;
-			state.lastResult = copy;
-		});
+				state.result = copy;
+				state.argsForLastResult = argsObject;
+				state.lastResult = copy;
+			},
+			(e: Error) => {
+				state.result = e;
+				state.argsForLastResult = argsObject;
+				// is it important to copy the error here?
+				const copy = structuredClone(e);
+				state.lastResult = copy;
+			}
+		);
 		return unsubscribe;
 	});
 
@@ -123,22 +133,33 @@ export function useQuery<Query extends FunctionReference<'query'>>(
 		}
 	});
 
-	// This value updates before the effect runs.
+	// Return value or undefined; never an error object.
 	const syncResult: FunctionReturnType<Query> | undefined = $derived.by(() => {
 		const opts = parseOptions(options);
 		if (opts.initialData && !state.haveArgsEverChanged) {
 			return state.result;
 		}
-		const value =
-			!client.disabled && client.client.localQueryResult(getFunctionName(query), parseArgs(args));
+		let value;
+		try {
+			value = client.disabled
+				? undefined
+				: client.client.localQueryResult(getFunctionName(query), parseArgs(args));
+		} catch (e) {
+			if (!(e instanceof Error)) {
+				// This should not happen by the API of localQueryResult().
+				console.error('threw non-Error instance', e);
+				throw e;
+			}
+			value = e;
+		}
 		// If state result has updated then it's time to check the for a new local value
 		state.result;
 		return value;
 	});
 
-	const result = $derived(
-		syncResult !== undefined ? syncResult : staleAllowed ? state.lastResult : undefined
-	);
+	const result = $derived.by(() => {
+		return syncResult !== undefined ? syncResult : staleAllowed ? state.lastResult : undefined;
+	});
 	const isStale = $derived(
 		syncResult === undefined && staleAllowed && !sameArgsAsLastResult && result !== undefined
 	);
@@ -155,13 +176,13 @@ export function useQuery<Query extends FunctionReference<'query'>>(
 		return undefined;
 	});
 
-	// This TypeScript cast makes data not undefined if error and isLoading are checked first.
+	// This TypeScript cast promises data is not undefined if error and isLoading are checked first.
 	return {
 		get data() {
 			return data;
 		},
 		get isLoading() {
-			return data === undefined;
+			return error === undefined && data === undefined;
 		},
 		get error() {
 			return error;
