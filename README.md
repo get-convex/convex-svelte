@@ -87,6 +87,47 @@ Running a mutation looks like
 </form>
 ```
 
+### Server-side rendering
+
+`useQuery()` accepts an `initialData` option in its third argument.
+By defining a `load()` function in a +page.server.ts file
+that uses the `ConvexHttpClient` to request the same query to get initial data
+and passing that through to the `initialData` option of a useQuery call you can avoid an initial loading state.
+
+```ts
+// +page.server.ts
+import { ConvexHttpClient } from 'convex/browser';
+import type { PageServerLoad } from './$types.js';
+import { PUBLIC_CONVEX_URL } from '$env/static/public';
+import { api } from '../convex/_generated/api.js';
+
+export const load = (async () => {
+	const client = new ConvexHttpClient(PUBLIC_CONVEX_URL!);
+	return {
+		messages: await client.query(api.messages.list, { muteWords: [] })
+	};
+}) satisfies PageServerLoad;
+```
+
+```svelte
+<script lang="ts">
+	// +page.svelte
+	import type { PageData } from './$types.js';
+	let { data }: { data: PageData } = $props();
+
+	import { useQuery, useConvexClient } from '$lib/client.svelte.js';
+	import { api } from '../convex/_generated/api.js';
+
+	const messages = useQuery(
+		api.messages.list,
+		() => args,
+		() => ({ initialData: data.messages })
+	);
+</script>
+```
+
+Combining specifying `initialData` and either setting the `keepPreviousData` option to true or never modifying the arguments passed to a query should be enough to avoid ever seeing a loading state for a `useQuery()`.
+
 ### Deploying a Svelte App
 
 In production build pipelines use the build command
