@@ -4,7 +4,7 @@
 	import { api } from '../../convex/_generated/api.js';
 
 	const convex = useConvexClient();
-	const serverNumbers = useQuery(api.numbers.get, {});
+	const serverNumbers = useQuery(api.numbers.get);
 
 	let numbers = $state(null);
 	// Have some changes not yet been sent?
