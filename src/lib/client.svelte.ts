@@ -60,7 +60,7 @@ type UseQueryReturn<Query extends FunctionReference<'query'>> =
  */
 export function useQuery<Query extends FunctionReference<'query'>>(
 	query: Query,
-	args: FunctionArgs<Query> | (() => FunctionArgs<Query>),
+	args: FunctionArgs<Query> | (() => FunctionArgs<Query>) = {},
 	options: UseQueryOptions<Query> | (() => UseQueryOptions<Query>) = {}
 ): UseQueryReturn<Query> {
 	const client = useConvexClient();

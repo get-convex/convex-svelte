@@ -3,7 +3,7 @@
 	import type { Doc } from '../../../convex/_generated/dataModel.js';
 	import { api } from '../../../convex/_generated/api.js';
 
-	const foo = useQuery(api.messages.error, {});
+	const foo = useQuery(api.messages.error);
 
 	function fail(msg: any) {
 		setTimeout(() => {
