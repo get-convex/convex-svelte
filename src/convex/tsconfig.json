@@ -13,8 +13,8 @@
 		"lib": ["ES2021", "dom"],
 		"forceConsistentCasingInFileNames": true,
 		"allowSyntheticDefaultImports": true,
-		"module": "ESNext",
-		"moduleResolution": "Node",
+		"module": "esnext",
+		"moduleResolution": "bundler",
 		"isolatedModules": true,
 		"skipLibCheck": true,
 		"noEmit": true

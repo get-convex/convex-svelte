@@ -66,18 +66,20 @@ Running a mutation looks like
 
 ```svelte
 <script>
-	const client = useConvexClient();
+import { api } from "../../convex/_generated/api.js"; // depending on file location
+import { useConvexClient, useQuery } from "convex-svelte";
+const client = useConvexClient();
 
-	let toSend = $state('');
-	let author = $state('me');
+let toSend = $state('');
+let author = $state('me');
 
-	function onSubmit(e: SubmitEvent) {
-		const data = Object.fromEntries(new FormData(e.target as HTMLFormElement).entries());
-		client.mutation(api.messages.send, {
-			author: data.author as string,
-			body: data.body as string
-		});
-	}
+function onSubmit(e: SubmitEvent) {
+	const data = Object.fromEntries(new FormData(e.target as HTMLFormElement).entries());
+	client.mutation(api.messages.send, {
+		author: data.author as string,
+		body: data.body as string
+	});
+}
 </script>
 
 <form on:submit|preventDefault={onSubmit}>
