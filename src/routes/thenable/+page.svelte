@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { convexQuery } from '$lib/thenable-query.svelte.js';
-	import { useConvexClient } from '$lib/client.svelte.js';
+	import { useQuery, useConvexClient } from '$lib/client.svelte.js';
 	import { api } from '$convex/_generated/api.js';
 	import type { Doc } from '$convex/_generated/dataModel.js';
 
@@ -18,7 +18,11 @@
 		author: 'me'
 	});
 
-	const messages = $derived(await convexQuery(api.messages.list, { muteWords: muteWords }));
+    /* New handler doesn't work with HMR */
+	const messages = await convexQuery(api.messages.list, () => ({ muteWords: muteWords }));
+
+    /* Old handler works with HMR */
+	// const messages = $derived(useQuery(api.messages.list, { muteWords: muteWords }));
 
 	const client = useConvexClient();
 
@@ -63,7 +67,7 @@
 
 	<div class="messagesWrap">
 		<ul class="messages" aria-live="polite">
-			{#each sortAscending(messages.data) as message (message._id)}
+			{#each sortAscending(messages.data ?? []) as message (message._id)}
 				<li class="message">
 					<div class="avatar" aria-hidden="true">{message.author?.slice(0, 1).toUpperCase()}</div>
 					<div class="bubble">
