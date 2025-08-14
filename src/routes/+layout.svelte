@@ -13,8 +13,11 @@
 
 	<footer>
 		<p>
-			visit <a href="https://kit.svelte.dev">kit.svelte.dev</a> to learn SvelteKit and
-			<a href="https://docs.convex.dev">docs.convex.dev</a> to learn Convex
+			The project uses
+			<a href="https://github.com/get-convex/convex-svelte">convex-svelte</a>,
+			<a href="https://docs.convex.dev">Convex</a>,
+			and
+			<a href="https://kit.svelte.dev">SvelteKit</a>
 		</p>
 	</footer>
 </div>
