@@ -73,7 +73,8 @@ const client = useConvexClient();
 let toSend = $state('');
 let author = $state('me');
 
-function onSubmit(e: SubmitEvent) {
+function onsubmit(e: SubmitEvent) {
+	e.preventDefault();
 	const data = Object.fromEntries(new FormData(e.target as HTMLFormElement).entries());
 	client.mutation(api.messages.send, {
 		author: data.author as string,
@@ -82,7 +83,7 @@ function onSubmit(e: SubmitEvent) {
 }
 </script>
 
-<form on:submit|preventDefault={onSubmit}>
+<form {onsubmit}>
 	<input type="text" id="author" name="author" />
 	<input type="text" id="body" name="body" bind:value={toSend} />
 	<button type="submit" disabled={!toSend}>Send</button>
