@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { api } from '$convex/_generated/api.js';
-    import { convexQuery } from '$lib/convex-query.svelte.js';
+    import { convexQuery } from '$lib/async.svelte.js';
 
     let fail = $state(false);
 

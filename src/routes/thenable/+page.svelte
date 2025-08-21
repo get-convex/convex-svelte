@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { convexQuery } from '$lib/convex-query.svelte.js';
+	import { convexQuery } from '$lib/async.svelte.js';
 	import { useConvexClient } from '$lib/client.svelte.js';
 	import { api } from '$convex/_generated/api.js';
 	import type { Doc } from '$convex/_generated/dataModel.js';
