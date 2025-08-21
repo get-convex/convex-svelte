@@ -22,6 +22,19 @@ export const send = mutation({
 	}
 });
 
+export const firstMessage = query({
+	args: {
+		fail: v.boolean()
+	},
+	handler: async (ctx, args) => {
+		if (args.fail) {
+			console.log('fail', args.fail);
+			throw new Error('test error');
+		}
+		return ctx.db.query('messages').first();
+	}
+});
+
 import seedMessages from './seed_messages.js';
 export const seed = internalMutation({
 	handler: async (ctx) => {

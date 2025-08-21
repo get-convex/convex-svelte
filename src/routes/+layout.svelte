@@ -8,7 +8,18 @@
 
 <div class="app">
 	<main>
-		{@render children()}
+		<svelte:boundary onerror={(e) => {
+			console.error(e);
+		}}>
+			{@render children()}
+			
+			{#snippet pending()}
+				<div>Loading...</div>
+			{/snippet}
+			{#snippet failed(error, reset)}
+				<div>Error: {error}</div>
+			{/snippet}
+		</svelte:boundary>
 	</main>
 
 	<footer>

@@ -1,10 +1,9 @@
 <script lang="ts">
-	import { convexQuery } from '$lib/thenable-query.svelte.js';
-	import { useQuery, useConvexClient } from '$lib/client.svelte.js';
+	import { convexQuery } from '$lib/convex-query.svelte.js';
+	import { useConvexClient } from '$lib/client.svelte.js';
 	import { api } from '$convex/_generated/api.js';
 	import type { Doc } from '$convex/_generated/dataModel.js';
 
-	let useStale = $state(true);
 	let muteWordsString = $state('');
 	let muteWords = $derived(
 		muteWordsString
@@ -18,11 +17,7 @@
 		author: 'me'
 	});
 
-    /* New handler doesn't work with HMR */
-	const messages = await convexQuery(api.messages.list, () => ({ muteWords: muteWords }));
-
-    /* Old handler works with HMR */
-	// const messages = $derived(useQuery(api.messages.list, { muteWords: muteWords }));
+	const messages = $derived(await convexQuery(api.messages.list, { muteWords: muteWords }));
 
 	const client = useConvexClient();
 
@@ -59,15 +54,11 @@
 				bind:value={muteWordsString}
 			/>
 		</div>
-		<label class="toggle" for="useStale">
-			<input type="checkbox" id="useStale" name="useStale" bind:checked={useStale} />
-			<span>Show stale while loading</span>
-		</label>
 	</div>
 
 	<div class="messagesWrap">
 		<ul class="messages" aria-live="polite">
-			{#each sortAscending(messages.data ?? []) as message (message._id)}
+			{#each sortAscending(messages) as message (message._id)}
 				<li class="message">
 					<div class="avatar" aria-hidden="true">{message.author?.slice(0, 1).toUpperCase()}</div>
 					<div class="bubble">
@@ -110,17 +101,15 @@
 		max-width: 860px;
 		margin: 0 auto;
 	}
-
-	.header {
+	.header,
+	.filters {
 		display: flex;
 		align-items: center;
 		gap: 0.5rem;
 	}
-
 	.header h2 {
 		margin: 0;
 	}
-
 	.badge {
 		font-size: 0.85rem;
 		font-weight: 600;
@@ -130,7 +119,6 @@
 		padding: 0.15rem 0.5rem;
 		border-radius: 999px;
 	}
-
 	.toolbar {
 		display: flex;
 		align-items: center;
@@ -138,21 +126,6 @@
 		gap: 1rem;
 		flex-wrap: wrap;
 	}
-
-	.filters {
-		display: flex;
-		align-items: center;
-		gap: 0.5rem;
-	}
-
-	.toggle {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.5rem;
-		user-select: none;
-		font-size: 0.9rem;
-	}
-
 	.messagesWrap {
 		position: relative;
 		border: 1px solid rgba(0, 0, 0, 0.08);
@@ -162,7 +135,6 @@
 		max-height: 60vh;
 		overflow: auto;
 	}
-
 	.messages {
 		list-style: none;
 		margin: 0;
@@ -171,13 +143,11 @@
 		flex-direction: column;
 		gap: 0.5rem;
 	}
-
 	.message {
 		display: flex;
 		align-items: flex-start;
 		gap: 0.5rem;
 	}
-
 	.avatar {
 		inline-size: 40px;
 		block-size: 40px;
@@ -190,43 +160,37 @@
 		font-weight: 700;
 	}
 	.bubble {
-		background: #ffffff;
+		background: #fff;
 		border: 1px solid rgba(0, 0, 0, 0.08);
 		border-radius: 12px;
 		padding: 0.5rem 0.75rem;
 		box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
 		max-width: 72%;
 	}
-
 	.meta {
 		display: flex;
 		align-items: baseline;
 		gap: 0.5rem;
 		margin-bottom: 0.25rem;
 	}
-
 	.author {
 		font-weight: 700;
 	}
-
 	.time {
 		font-size: 0.8rem;
 		color: #6b7280;
 		white-space: nowrap;
 	}
-
 	.body {
 		white-space: pre-wrap;
 		word-wrap: break-word;
 	}
-
 	.composer {
 		display: grid;
 		grid-template-columns: 160px 1fr auto;
 		gap: 0.5rem;
 		align-items: center;
 	}
-
 	.composer input[type='text'] {
 		appearance: none;
 		border: 1px solid rgba(0, 0, 0, 0.18);
@@ -234,25 +198,21 @@
 		padding: 0.5rem 0.75rem;
 		background: #fff;
 	}
-
 	.composer input[type='text']:focus {
 		outline: 3px solid color-mix(in srgb, #0ea5e9 24%, transparent);
 		border-color: #0ea5e9;
 	}
-
 	button {
 		padding: 0.5rem 0.9rem;
 		border-radius: 10px;
 		border: 1px solid rgba(0, 0, 0, 0.12);
-		background: linear-gradient(180deg, #ffffff, #f3f4f6);
+		background: linear-gradient(180deg, #fff, #f3f4f6);
 		cursor: pointer;
 		font-weight: 600;
 	}
-
 	button:hover {
 		background: linear-gradient(180deg, #f8fafc, #e5e7eb);
 	}
-
 	button:disabled {
 		opacity: 0.6;
 		cursor: not-allowed;
