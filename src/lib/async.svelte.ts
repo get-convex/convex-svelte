@@ -1,12 +1,23 @@
 import { useConvexClient } from "$lib/client.svelte.js";
 import { type FunctionReference } from "convex/server";
 
+type ConvexQuery<T> = {
+    then: (
+        onfulfilled: (value: T) => void,
+        onrejected: (reason: any) => void
+    ) => void;
+    current: T | undefined;
+    error: Error | undefined;
+    loading: boolean;
+    [Symbol.dispose]: () => void;
+}
+
 export function convexQuery<
-    Query extends FunctionReference<'query'>,
+    Query extends FunctionReference<'query', 'public'>,
 >(
     queryFunc: Query,
     args: Query['_args'] = {}
-) {
+): ConvexQuery<Query['_returnType']> {
     const client = useConvexClient();
 
     const state: {

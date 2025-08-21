@@ -2,7 +2,6 @@
 	import { convexQuery } from '$lib/async.svelte.js';
 	import { useConvexClient } from '$lib/client.svelte.js';
 	import { api } from '$convex/_generated/api.js';
-	import type { Doc } from '$convex/_generated/dataModel.js';
 
 	let muteWordsString = $state('');
 	let muteWords = $derived(
@@ -17,7 +16,7 @@
 		author: 'me'
 	});
 
-	const messages = $derived(await convexQuery(api.messages.list, { muteWords: muteWords }));
+	const messages = $derived(convexQuery(api.messages.list, { muteWords: muteWords }));
 
 	const client = useConvexClient();
 
@@ -30,10 +29,6 @@
 
 	function formatDate(ts: number) {
 		return new Date(ts).toLocaleString();
-	}
-
-	function sortAscending(items: Doc<'messages'>[]): Doc<'messages'>[] {
-		return items.sort((a, b) => a._creationTime - b._creationTime);
 	}
 </script>
 
@@ -58,7 +53,7 @@
 
 	<div class="messagesWrap">
 		<ul class="messages" aria-live="polite">
-			{#each sortAscending(messages) as message (message._id)}
+			{#each await messages as message (message._id)}
 				<li class="message">
 					<div class="avatar" aria-hidden="true">{message.author?.slice(0, 1).toUpperCase()}</div>
 					<div class="bubble">
