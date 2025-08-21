@@ -1,5 +1,5 @@
 import { useConvexClient } from "$lib/client.svelte.js";
-import { type DefaultFunctionArgs, type FunctionReference } from "convex/server";
+import { getFunctionName, type FunctionReference } from "convex/server";
 
 export type ConvexQuery<T> = {
     then: (
@@ -9,13 +9,14 @@ export type ConvexQuery<T> = {
     current: T | undefined;
     error: Error | undefined;
     loading: boolean;
-    [Symbol.dispose]: () => void;
 }
 
 
 export type ConvexQueryOptions<Query extends FunctionReference<'query'>> = {
-	// Use this data and assume it is up to date (typically for SSR and hydration)
-	initialData?: Query['_returnType'];
+    // Use this data and assume it is up to date (typically for SSR and hydration)
+    initialData?: Query['_returnType'];
+    // Prevent the query from updating when false
+    skip?: boolean;
 };
 
 /**
@@ -41,7 +42,10 @@ export function convexQuery<
         current: Query['_returnType'] | undefined,
         error: Error | undefined,
     } = $state({
-        current: options.initialData,
+        /* Get the current value from the cache */
+        current: client.client.localQueryResult(
+            getFunctionName(queryFunc), args
+        ) ?? options.initialData,
         error: undefined,
     });
 
@@ -49,22 +53,26 @@ export function convexQuery<
         state.current === undefined && state.error === undefined
     );
 
-	/* Get the value from Convex and subscribe to it */
-    const unsubscribe = client.onUpdate(
-        queryFunc,
-        args,
-        (result) => {
-            state.current = result;
-            state.error = undefined;
-        },
-        (err) => {
-            state.current = undefined;
-            state.error = err;
+    /* Subscription lifecycle for the query.  Subscription is removed when options.skip is true */
+    $effect(() => {
+        let unsubscribe = () => { };
+        if (!options.skip) {
+            unsubscribe = client.onUpdate(
+                queryFunc,
+                args,
+                (result) => {
+                    state.current = result;
+                    state.error = undefined;
+                },
+                (err) => {
+                    state.current = undefined;
+                    state.error = err;
+                }
+            );
         }
-    );
 
-    /* Unsubscribe from the query when the parent component is destroyed */
-    $effect(() => unsubscribe);
+        return unsubscribe;
+    });
 
     return {
         get then() {
@@ -79,7 +87,8 @@ export function convexQuery<
                         resolve(value);
                         return;
                     }
-					/* If the query is already in the cache, return the cached value */
+
+                    /* If the query is already in the cache, return the cached value */
                     client.query(queryFunc, args).then((result) => {
                         resolve(value ?? result);
                     }).catch((err) => {
@@ -100,6 +109,5 @@ export function convexQuery<
         get current() { return state.current; },
         get error() { return state.error; },
         get loading() { return loading; },
-        [Symbol.dispose]: unsubscribe
     };
 }
