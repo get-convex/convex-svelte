@@ -1,7 +1,7 @@
 import { useConvexClient } from "$lib/client.svelte.js";
-import { type FunctionReference } from "convex/server";
+import { type DefaultFunctionArgs, type FunctionReference } from "convex/server";
 
-type ConvexQuery<T> = {
+export type ConvexQuery<T> = {
     then: (
         onfulfilled: (value: T) => void,
         onrejected: (reason: any) => void
@@ -12,11 +12,28 @@ type ConvexQuery<T> = {
     [Symbol.dispose]: () => void;
 }
 
+
+export type ConvexQueryOptions<Query extends FunctionReference<'query'>> = {
+	// Use this data and assume it is up to date (typically for SSR and hydration)
+	initialData?: Query['_returnType'];
+};
+
+/**
+ * Subscribe to a Convex query and return a reactive query result object that can be awaited.
+*
+ * @experimental API is experimental and could change.
+ * @param queryFunc - a FunctionRefernece like `api.dir1.dir2.filename.func`.
+ * @param args - The arguments to the query function.
+ * @param options - ConvexQueryOptions like `initialData`.
+ * @returns a thenable object.  Also contains `current`, `error`, and `loading` properties.
+ */
 export function convexQuery<
     Query extends FunctionReference<'query', 'public'>,
+    Args extends Query['_args']
 >(
     queryFunc: Query,
-    args: Query['_args'] = {}
+    args: Args,
+    options: ConvexQueryOptions<Query> = {}
 ): ConvexQuery<Query['_returnType']> {
     const client = useConvexClient();
 
@@ -24,7 +41,7 @@ export function convexQuery<
         current: Query['_returnType'] | undefined,
         error: Error | undefined,
     } = $state({
-        current: undefined,
+        current: options.initialData,
         error: undefined,
     });
 
@@ -57,6 +74,11 @@ export function convexQuery<
                     resolve: (value: Query['_returnType']) => void,
                     reject: (reason: any) => void,
                 ) => {
+                    /* If there is initial data then resolve immediately */
+                    if (value !== undefined) {
+                        resolve(value);
+                        return;
+                    }
 					/* If the query is already in the cache, return the cached value */
                     client.query(queryFunc, args).then((result) => {
                         resolve(value ?? result);

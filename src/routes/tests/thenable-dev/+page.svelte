@@ -16,6 +16,7 @@
 	<h1>Welcome to SvelteKit with Convex</h1>
     <a href="/tests">Tests</a>
 
+    <button onclick={() => fail = !fail}>{fail ? 'Fail' : 'Success'}</button>
     <svelte:boundary>
         <pre>Result: {JSON.stringify(await convexQueryResult, null, 2)}</pre>
         <pre>Result: {JSON.stringify(await convexQuery(api.messages.firstMessage, { fail }), null, 2)}</pre>
