@@ -4,8 +4,21 @@ import { convexToJson } from "convex/values";
 import { tick } from "svelte";
 
 
-export function generateCacheKey<Query extends FunctionReference<'query', 'public'>>(query: Query, args: Query['_args']) {
-    return getFunctionName(query) + JSON.stringify(convexToJson(args));
+export type ConvexQueryOptions<Query extends FunctionReference<'query', 'public'>> = {
+    // Use this data and assume it is up to date (typically for SSR and hydration)
+    initialData?: Query['_returnType'];
+};
+
+export function generateCacheKey<
+    Query extends FunctionReference<'query', 'public'>
+>(
+    query: Query,
+    args: Query['_args'],
+    options: ConvexQueryOptions<Query>
+) {
+    return getFunctionName(query)
+        + JSON.stringify(convexToJson(args))
+        + JSON.stringify(options);
 }
 
 export class ConvexQuery<Query extends FunctionReference<'query', 'public'>, T = Query['_returnType']> {
@@ -50,20 +63,25 @@ export class ConvexQuery<Query extends FunctionReference<'query', 'public'>, T =
         };
     });
 
-    constructor(query: Query, args: Query['_args']) {
+    constructor(query: Query, args: Query['_args'], options: ConvexQueryOptions<Query>) {
         const client = useConvexClient();
 
-        this._key = generateCacheKey(query, args);
+        this._key = generateCacheKey(query, args, options);
         this.#args = args;
-        this.#fn = () => client.query(query, this.#args);
-        this.#promise = $state.raw(this.#run());
+
+		this.#fn = () => {
+			if (options.initialData) {
+				return Promise.resolve(options.initialData);
+			}
+			return client.query(query, this.#args);
+		}
+		this.#promise = $state.raw(this.#run());
 
         this.unsubscribe = client.onUpdate(query, this.#args, (result: Query['_returnType']) => {
             // The first value is resolved by the promise, so we don't need to update the query here
             if (!this.#ready) return;
 
-            this.#fn = () => Promise.resolve(result);
-            this.#promise = this.#run();
+            this.set(result);
         });
     }
 
@@ -193,9 +211,11 @@ function removeUnusedCachedValues(cacheKey: string, entry: CacheEntry) {
 }
 
 export const convexQuery = <Query extends FunctionReference<'query', 'public'>>(
-    query: Query, args: Query['_args']
+    query: Query,
+    args: Query['_args'],
+    options: ConvexQueryOptions<Query> = {}
 ) => {
-    const cacheKey = generateCacheKey(query, args);
+    const cacheKey = generateCacheKey(query, args, options);
     let entry = queryCache.get(cacheKey);
 
     let tracking = true;
@@ -216,7 +236,7 @@ export const convexQuery = <Query extends FunctionReference<'query', 'public'>>(
 
     let resource = entry?.resource;
     if (!resource) {
-        resource = new ConvexQuery(query, args);
+        resource = new ConvexQuery(query, args, options);
         queryCache.set(cacheKey,
             (entry = {
                 count: tracking ? 1 : 0,
