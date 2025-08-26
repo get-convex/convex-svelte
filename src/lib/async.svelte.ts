@@ -13,12 +13,10 @@ export function generateCacheKey<
     Query extends FunctionReference<'query', 'public'>
 >(
     query: Query,
-    args: Query['_args'],
-    options: ConvexQueryOptions<Query>
+    args: Query['_args']
 ) {
     return getFunctionName(query)
         + JSON.stringify(convexToJson(args))
-        + JSON.stringify(options);
 }
 
 export class ConvexQuery<Query extends FunctionReference<'query', 'public'>, T = Query['_returnType']> {
@@ -63,18 +61,13 @@ export class ConvexQuery<Query extends FunctionReference<'query', 'public'>, T =
         };
     });
 
-    constructor(query: Query, args: Query['_args'], options: ConvexQueryOptions<Query>) {
+    constructor(query: Query, args: Query['_args']) {
         const client = useConvexClient();
 
-        this._key = generateCacheKey(query, args, options);
+        this._key = generateCacheKey(query, args);
         this.#args = args;
 
-		this.#fn = () => {
-			if (options.initialData) {
-				return Promise.resolve(options.initialData);
-			}
-			return client.query(query, this.#args);
-		}
+		this.#fn = () => client.query(query, this.#args);
 		this.#promise = $state.raw(this.#run());
 
         this.unsubscribe = client.onUpdate(query, this.#args, (result: Query['_returnType']) => {
@@ -212,10 +205,9 @@ function removeUnusedCachedValues(cacheKey: string, entry: CacheEntry) {
 
 export const convexQuery = <Query extends FunctionReference<'query', 'public'>>(
     query: Query,
-    args: Query['_args'],
-    options: ConvexQueryOptions<Query> = {}
+    args: Query['_args']
 ) => {
-    const cacheKey = generateCacheKey(query, args, options);
+    const cacheKey = generateCacheKey(query, args);
     let entry = queryCache.get(cacheKey);
 
     let tracking = true;
@@ -236,7 +228,7 @@ export const convexQuery = <Query extends FunctionReference<'query', 'public'>>(
 
     let resource = entry?.resource;
     if (!resource) {
-        resource = new ConvexQuery(query, args, options);
+        resource = new ConvexQuery(query, args);
         queryCache.set(cacheKey,
             (entry = {
                 count: tracking ? 1 : 0,
