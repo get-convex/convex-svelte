@@ -1,24 +1,14 @@
-import { browser } from "$app/environment";
-// import { cache } from "$routes/test/convex-queries.svelte";
-import { useConvexClient } from "convex-svelte";
-import { ConvexClient } from "convex/browser";
+import { useConvexClient } from "./client.svelte";
 import { getFunctionName, type FunctionReference } from "convex/server";
 import { convexToJson } from "convex/values";
-import { onDestroy, tick, untrack } from "svelte";
+import { tick } from "svelte";
 
-
-export type ConvexQueryOptions<Query extends FunctionReference<'query', 'public'>> = {
-    // Use this data and assume it is up to date (typically for SSR and hydration)
-    initialData?: Query['_returnType'];
-    // Prevent the query from updating when false
-    skip?: boolean;
-};
 
 export function generateCacheKey<Query extends FunctionReference<'query', 'public'>>(query: Query, args: Query['_args']) {
     return getFunctionName(query) + JSON.stringify(convexToJson(args));
 }
 
-export class ConvexQuery<T, Query extends FunctionReference<'query', 'public'>> implements Partial<Promise<T>> {
+export class ConvexQuery<Query extends FunctionReference<'query', 'public'>, T = Query['_returnType']> {
     _key: string;
     #init = false;
     #fn: () => Promise<T>;
@@ -68,7 +58,7 @@ export class ConvexQuery<T, Query extends FunctionReference<'query', 'public'>> 
         this.#fn = () => client.query(query, this.#args);
         this.#promise = $state.raw(this.#run());
 
-        this.unsubscribe = client.onUpdate(query, this.#args, (result) => {
+        this.unsubscribe = client.onUpdate(query, this.#args, (result: Query['_returnType']) => {
             // The first value is resolved by the promise, so we don't need to update the query here
             if (!this.#ready) return;
 
@@ -190,7 +180,7 @@ export class ConvexQuery<T, Query extends FunctionReference<'query', 'public'>> 
 }
 
 
-type CacheEntry = { count: number, resource: ConvexQuery<any, any> };
+type CacheEntry = { count: number, resource: ConvexQuery<any> };
 const queryCache = new Map<string, CacheEntry>();
 
 function removeUnusedCachedValues(cacheKey: string, entry: CacheEntry) {
@@ -242,5 +232,5 @@ export const convexQuery = <Query extends FunctionReference<'query', 'public'>>(
             });
     }
 
-    return resource;
+    return resource as ConvexQuery<Query>;
 };
