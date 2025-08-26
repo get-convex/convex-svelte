@@ -1,113 +1,246 @@
-import { useConvexClient } from "$lib/client.svelte.js";
+import { browser } from "$app/environment";
+// import { cache } from "$routes/test/convex-queries.svelte";
+import { useConvexClient } from "convex-svelte";
+import { ConvexClient } from "convex/browser";
 import { getFunctionName, type FunctionReference } from "convex/server";
-
-export type ConvexQuery<T> = {
-    then: (
-        onfulfilled: (value: T) => void,
-        onrejected: (reason: any) => void
-    ) => void;
-    current: T | undefined;
-    error: Error | undefined;
-    loading: boolean;
-}
+import { convexToJson } from "convex/values";
+import { onDestroy, tick, untrack } from "svelte";
 
 
-export type ConvexQueryOptions<Query extends FunctionReference<'query'>> = {
+export type ConvexQueryOptions<Query extends FunctionReference<'query', 'public'>> = {
     // Use this data and assume it is up to date (typically for SSR and hydration)
     initialData?: Query['_returnType'];
     // Prevent the query from updating when false
     skip?: boolean;
 };
 
-/**
- * Subscribe to a Convex query and return a reactive query result object that can be awaited.
-*
- * @experimental API is experimental and could change.
- * @param queryFunc - a FunctionRefernece like `api.dir1.dir2.filename.func`.
- * @param args - The arguments to the query function.
- * @param options - ConvexQueryOptions like `initialData`.
- * @returns a thenable object.  Also contains `current`, `error`, and `loading` properties.
- */
-export function convexQuery<
-    Query extends FunctionReference<'query', 'public'>,
-    Args extends Query['_args']
->(
-    queryFunc: Query,
-    args: Args,
-    options: ConvexQueryOptions<Query> = {}
-): ConvexQuery<Query['_returnType']> {
-    const client = useConvexClient();
+export function generateCacheKey<Query extends FunctionReference<'query', 'public'>>(query: Query, args: Query['_args']) {
+    return getFunctionName(query) + JSON.stringify(convexToJson(args));
+}
 
-    const state: {
-        current: Query['_returnType'] | undefined,
-        error: Error | undefined,
-    } = $state({
-        /* Get the current value from the cache */
-        current: client.client.localQueryResult(
-            getFunctionName(queryFunc), args
-        ) ?? options.initialData,
-        error: undefined,
+export class ConvexQuery<T, Query extends FunctionReference<'query', 'public'>> implements Partial<Promise<T>> {
+    _key: string;
+    #init = false;
+    #fn: () => Promise<T>;
+    #loading = $state(true);
+    #latest: Array<() => void> = [];
+    unsubscribe: () => void;
+    #args: Query['_args'];
+
+    #ready = $state(false);
+    #raw = $state.raw<T | undefined>(undefined);
+    #promise: Promise<void>;
+    #overrides = $state<Array<(old: T) => T>>([]);
+
+    #current = $derived.by(() => {
+        // don't reduce undefined value
+        if (!this.#ready) return undefined;
+
+        return this.#overrides.reduce((v, r) => r(v), this.#raw as T);
     });
 
-    const loading: boolean = $derived(
-        state.current === undefined && state.error === undefined
-    );
+    #error = $state.raw<Error | undefined>(undefined);
 
-    /* Subscription lifecycle for the query.  Subscription is removed when options.skip is true */
-    $effect(() => {
-        let unsubscribe = () => { };
-        if (!options.skip) {
-            unsubscribe = client.onUpdate(
-                queryFunc,
-                args,
-                (result) => {
-                    state.current = result;
-                    state.error = undefined;
-                },
-                (err) => {
-                    state.current = undefined;
-                    state.error = err;
-                }
-            );
+    #then = $derived.by(() => {
+        const p = this.#promise;
+        this.#overrides.length;
+
+        return async (resolve?: (value: T) => void, reject?: (reason: any) => void) => {
+            try {
+                // svelte-ignore await_reactivity_loss
+                await p;
+                // svelte-ignore await_reactivity_loss
+                await tick();
+                resolve?.(this.#current as T);
+                // resolve?.(untrack(() => this.#current as T));
+                // resolve?.("this.#current as T");
+            } catch (error) {
+                reject?.(error);
+            }
+        };
+    });
+
+    constructor(query: Query, args: Query['_args']) {
+        const client = useConvexClient();
+
+        this._key = generateCacheKey(query, args);
+        this.#args = args;
+        this.#fn = () => client.query(query, this.#args);
+        this.#promise = $state.raw(this.#run());
+
+        this.unsubscribe = client.onUpdate(query, this.#args, (result) => {
+            // The first value is resolved by the promise, so we don't need to update the query here
+            if (!this.#ready) return;
+
+            this.#fn = () => Promise.resolve(result);
+            this.#promise = this.#run();
+        });
+    }
+
+    #run(): Promise<void> {
+        // Prevent state_unsafe_mutation error on first run when the resource is created within the template
+        if (this.#init) {
+            this.#loading = true;
+        } else {
+            this.#init = true;
         }
 
-        return unsubscribe;
-    });
+        // Don't use Promise.withResolvers, it's too new still
+        let resolve: () => void;
+        let reject: (e?: any) => void;
+        const promise: Promise<void> = new Promise((res, rej) => {
+            resolve = res;
+            reject = rej;
+        });
 
-    return {
-        get then() {
-            const value = state.current;
-            try {
-                return (
-                    resolve: (value: Query['_returnType']) => void,
-                    reject: (reason: any) => void,
-                ) => {
-                    /* If there is initial data then resolve immediately */
-                    if (value !== undefined) {
-                        resolve(value);
-                        return;
-                    }
+        this.#latest.push(resolve!);
 
-                    /* If the query is already in the cache, return the cached value */
-                    client.query(queryFunc, args).then((result) => {
-                        resolve(value ?? result);
-                    }).catch((err) => {
-                        reject(err);
-                        throw err;
-                    });
-                }
-            } catch (err) {
-                state.error = err as Error;
-                return (
-                    resolve: (value: Query['_returnType']) => void,
-                    reject: (reason: any) => void,
-                ) => {
-                    reject(err);
+        Promise.resolve(this.#fn())
+            .then((value) => {
+                // Skip the response if resource was refreshed with a later promise while we were waiting for this one to resolve
+                const idx = this.#latest.indexOf(resolve!);
+                if (idx === -1) return;
+
+                this.#latest.splice(0, idx).forEach((r) => r());
+                this.#ready = true;
+                this.#loading = false;
+                this.#raw = value;
+                this.#error = undefined;
+
+                resolve!();
+            })
+            .catch((e) => {
+                const idx = this.#latest.indexOf(resolve!);
+                if (idx === -1) return;
+
+                this.#latest.splice(0, idx).forEach((r) => r());
+                this.#error = e;
+                this.#loading = false;
+                reject!(e);
+            });
+
+        return promise;
+    }
+
+    get then() {
+        return this.#then;
+    }
+
+    get catch() {
+        this.#then;
+        return (reject: (reason: any) => void) => {
+            return this.#then(undefined, reject);
+        };
+    }
+
+    get finally() {
+        this.#then;
+        return (fn: () => void) => {
+            return this.#then(
+                () => fn(),
+                () => fn()
+            );
+        };
+    }
+
+    get current(): T | undefined {
+        return this.#current;
+    }
+
+    get error(): Error | undefined {
+        return this.#error;
+    }
+
+    /**
+     * Returns true if the resource is loading or reloading.
+     */
+    get loading(): boolean {
+        return this.#loading;
+    }
+
+    /**
+     * Returns true once the resource has been loaded for the first time.
+     */
+    get ready(): boolean {
+        return this.#ready;
+    }
+
+    set(value: T): void {
+        this.#ready = true;
+        this.#loading = false;
+        this.#error = undefined;
+        this.#raw = value;
+        this.#promise = Promise.resolve();
+    }
+
+    withOverride(fn: (old: T) => T) {
+        this.#overrides.push(fn);
+
+        return {
+            _key: this._key,
+            release: () => {
+                const i = this.#overrides.indexOf(fn);
+
+                if (i !== -1) {
+                    this.#overrides.splice(i, 1);
                 }
             }
-        },
-        get current() { return state.current; },
-        get error() { return state.error; },
-        get loading() { return loading; },
-    };
+        };
+    }
 }
+
+
+type CacheEntry = { count: number, resource: ConvexQuery<any, any> };
+const queryCache = new Map<string, CacheEntry>();
+
+function removeUnusedCachedValues(cacheKey: string, entry: CacheEntry) {
+    void tick().then(() => {
+        if (!entry.count && entry === queryCache.get(cacheKey)) {
+            entry.resource.unsubscribe();
+            queryCache.delete(cacheKey);
+        }
+    });
+}
+
+export const convexQuery = <Query extends FunctionReference<'query', 'public'>>(
+    query: Query, args: Query['_args']
+) => {
+    const cacheKey = generateCacheKey(query, args);
+    let entry = queryCache.get(cacheKey);
+
+    let tracking = true;
+    try {
+        $effect.pre(() => {
+            if (entry) entry.count++;
+            return () => {
+                const entry = queryCache.get(cacheKey);
+                if (entry) {
+                    entry.count--;
+                    removeUnusedCachedValues(cacheKey, entry);
+                }
+            };
+        });
+    } catch {
+        tracking = false;
+    }
+
+    let resource = entry?.resource;
+    if (!resource) {
+        resource = new ConvexQuery(query, args);
+        queryCache.set(cacheKey,
+            (entry = {
+                count: tracking ? 1 : 0,
+                resource,
+            })
+        );
+        resource
+            .then(() => {
+                removeUnusedCachedValues(cacheKey, entry!);
+            })
+            .catch(() => {
+                queryCache.delete(cacheKey);
+            });
+    }
+
+    return resource;
+};
