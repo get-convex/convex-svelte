@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { api } from '$convex/_generated/api.js';
 	import { convexQuery } from '$lib/async.svelte.js';
-	import { test } from './test.remote.js';
 
 	let fail = $state(false);
 	let skip = $state(false);
@@ -41,12 +40,12 @@
 	</svelte:boundary>
 
 	{#if firstMessageQuery.loading}
-        <div>Loading...</div>
-    {:else if firstMessageQuery.error}
-        <div>Error: {firstMessageQuery.error}</div>
-    {:else}
-        <pre>Result: {JSON.stringify(firstMessageQuery.current, null, 2)}</pre>
-    {/if}
+		<div>Loading...</div>
+	{:else if firstMessageQuery.error}
+		<div>Error: {firstMessageQuery.error}</div>
+	{:else}
+		<pre>Result: {JSON.stringify(firstMessageQuery.current, null, 2)}</pre>
+	{/if}
 </section>
 
 <style>
