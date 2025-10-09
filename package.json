@@ -10,7 +10,7 @@
 	},
 	"scripts": {
 		"dev": "npm-run-all dev:init --parallel dev:server dev:client",
-		"dev:client": "vite dev --open --host",
+		"dev:client": "vite dev --open",
 		"dev:server": "convex dev",
 		"dev:init": "convex dev --until-success --run messages:seed",
 		"build": "vite build && npm run package",

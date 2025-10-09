@@ -16,7 +16,7 @@
 		author: 'me'
 	});
 
-	const messages = $derived(convexQuery(api.messages.list, { muteWords: muteWords }));
+	const messages = $derived(await convexQuery(api.messages.list, { muteWords: muteWords }));
 
 	const client = useConvexClient();
 
@@ -53,7 +53,7 @@
 
 	<div class="messagesWrap">
 		<ul class="messages" aria-live="polite">
-			{#each await messages as message (message._id)}
+			{#each messages as message (message._id)}
 				<li class="message">
 					<div class="avatar" aria-hidden="true">{message.author?.slice(0, 1).toUpperCase()}</div>
 					<div class="bubble">

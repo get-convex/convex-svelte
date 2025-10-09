@@ -19,42 +19,33 @@ export function generateCacheKey<
 		+ JSON.stringify(convexToJson(args))
 }
 
-export class ConvexQuery<Query extends FunctionReference<'query', 'public'>, T = Query['_returnType']> {
+export class ConvexQuery<
+	Query extends FunctionReference<'query', 'public'>,
+	T = Query['_returnType'],
+> {
 	_key: string;
 	#init = false;
 	#fn: () => Promise<T>;
 	#loading = $state(true);
-	#latest: Array<() => void> = [];
 	unsubscribe: () => void;
 	#args: Query['_args'];
 
 	#ready = $state(false);
 	#raw = $state.raw<T | undefined>(undefined);
-	#promise: Promise<void>;
-	#overrides = $state<Array<(old: T) => T>>([]);
-
-	#current = $derived.by(() => {
-		// don't reduce undefined value
-		if (!this.#ready) return undefined;
-
-		return this.#overrides.reduce((v, r) => r(v), this.#raw as T);
-	});
+	#promise: Promise<T>;
 
 	#error = $state.raw<Error | undefined>(undefined);
 
 	#then = $derived.by(() => {
 		const p = this.#promise;
-		this.#overrides.length;
 
 		return async (resolve?: (value: T) => void, reject?: (reason: any) => void) => {
 			try {
 				// svelte-ignore await_reactivity_loss
-				await p;
+				const value = await p;
 				// svelte-ignore await_reactivity_loss
 				await tick();
-				resolve?.(this.#current as T);
-				// resolve?.(untrack(() => this.#current as T));
-				// resolve?.("this.#current as T");
+				resolve?.(value as T);
 			} catch (error) {
 				reject?.(error);
 			}
@@ -75,10 +66,13 @@ export class ConvexQuery<Query extends FunctionReference<'query', 'public'>, T =
 			if (!this.#ready) return;
 
 			this.set(result);
+		}, (error) => {
+			this.#fn = () => Promise.reject(error);
+			this.#promise = this.#run();
 		});
 	}
 
-	#run(): Promise<void> {
+	#run(): Promise<T> {
 		// Prevent state_unsafe_mutation error on first run when the resource is created within the template
 		if (this.#init) {
 			this.#loading = true;
@@ -87,34 +81,23 @@ export class ConvexQuery<Query extends FunctionReference<'query', 'public'>, T =
 		}
 
 		// Don't use Promise.withResolvers, it's too new still
-		let resolve: () => void;
+		let resolve: (value: T) => void;
 		let reject: (e?: any) => void;
-		const promise: Promise<void> = new Promise((res, rej) => {
-			resolve = res;
+		const promise: Promise<T> = new Promise<T>((res, rej) => {
+			resolve = res as any;
 			reject = rej;
 		});
 
-		this.#latest.push(resolve!);
-
 		Promise.resolve(this.#fn())
 			.then((value) => {
-				// Skip the response if resource was refreshed with a later promise while we were waiting for this one to resolve
-				const idx = this.#latest.indexOf(resolve!);
-				if (idx === -1) return;
-
-				this.#latest.splice(0, idx).forEach((r) => r());
 				this.#ready = true;
 				this.#loading = false;
 				this.#raw = value;
 				this.#error = undefined;
 
-				resolve!();
+				resolve!(value);
 			})
 			.catch((e) => {
-				const idx = this.#latest.indexOf(resolve!);
-				if (idx === -1) return;
-
-				this.#latest.splice(0, idx).forEach((r) => r());
 				this.#error = e;
 				this.#loading = false;
 				reject!(e);
@@ -145,7 +128,11 @@ export class ConvexQuery<Query extends FunctionReference<'query', 'public'>, T =
 	}
 
 	get current(): T | undefined {
-		return this.#current;
+		return this.#raw;
+	}
+
+	get data(): T | undefined {
+		return this.#raw;
 	}
 
 	get error(): Error | undefined {
@@ -171,22 +158,7 @@ export class ConvexQuery<Query extends FunctionReference<'query', 'public'>, T =
 		this.#loading = false;
 		this.#error = undefined;
 		this.#raw = value;
-		this.#promise = Promise.resolve();
-	}
-
-	withOverride(fn: (old: T) => T) {
-		this.#overrides.push(fn);
-
-		return {
-			_key: this._key,
-			release: () => {
-				const i = this.#overrides.indexOf(fn);
-
-				if (i !== -1) {
-					this.#overrides.splice(i, 1);
-				}
-			}
-		};
+		this.#promise = Promise.resolve(value);
 	}
 }
 
