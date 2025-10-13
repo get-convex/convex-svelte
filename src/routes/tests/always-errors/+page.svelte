@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { useQuery, useConvexClient } from '$lib/client.svelte.js';
-	import type { Doc } from '../../../convex/_generated/dataModel.js';
-	import { api } from '../../../convex/_generated/api.js';
+   	// @ts-nocheck - this file is for testing impossible states, so we do things that would normally be type errors.
+	import { useQuery } from '$lib/client.svelte.js';
+	import { api } from '$lib/convex/_generated/api.js';
 
 	const foo = useQuery(api.messages.error, {});
 

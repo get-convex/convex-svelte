@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { useQuery, useConvexClient } from '$lib/client.svelte.js';
-	import type { Doc } from '../convex/_generated/dataModel.js';
+	import { useMutation, useQuery } from '$lib/client.svelte.js';
 	import { api } from '../convex/_generated/api.js';
+	import type { Doc } from '../convex/_generated/dataModel.js';
 
 	const { initialMessages = [] as Doc<'messages'>[] } = $props();
 
@@ -22,12 +22,12 @@
 		() => ({ initialData: initialMessages, keepPreviousData: useStale })
 	);
 
-	const client = useConvexClient();
+	const sendMessage = useMutation(api.messages.send);
 
-	function onSubmit(e: SubmitEvent) {
+	async function onSubmit(e: SubmitEvent) {
 		const data = Object.fromEntries(new FormData(e.target as HTMLFormElement).entries());
 		toSend = '';
-		client.mutation(api.messages.send, {
+		await sendMessage({
 			author: data.author as string,
 			body: data.body as string
 		});
@@ -54,8 +54,14 @@
 	<form onsubmit={onSubmit}>
 		<input type="text" id="author" name="author" bind:value={author} />
 		<input type="text" id="body" name="body" bind:value={toSend} />
-		<button type="submit" disabled={!toSend}>Send</button>
+		<button type="submit" disabled={!toSend || sendMessage.isLoading}>
+			{sendMessage.isLoading ? 'Sending...' : 'Send'}
+		</button>
 	</form>
+
+	{#if sendMessage.error}
+		<p class="error">Error sending message: {sendMessage.error.message}</p>
+	{/if}
 
 	{#if messages.isLoading}
 		Loading...
@@ -64,7 +70,7 @@
 	{:else}
 		<ul class="messages" class:stale={messages.isStale}>
 			<ul>
-				{#each messages.data as message}
+				{#each messages.data as message (message._id)}
 					<li>
 						<span>{message.author}</span>
 						<span>{message.body}</span>
@@ -156,5 +162,11 @@
 
 	form input {
 		margin: 4px;
+	}
+
+	.error {
+		color: red;
+		font-size: 0.9rem;
+		margin: 0.5rem 0;
 	}
 </style>
