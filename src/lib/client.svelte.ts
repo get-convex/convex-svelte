@@ -9,6 +9,18 @@ import {
 import { convexToJson, type Value } from 'convex/values';
 import { BROWSER } from 'esm-env';
 
+type UseMutationReturn<Mutation extends FunctionReference<'mutation'>> = {
+	(args: FunctionArgs<Mutation>): Promise<FunctionReturnType<Mutation>>;
+	isLoading: boolean;
+	error: Error | undefined;
+};
+
+type UseActionReturn<Action extends FunctionReference<'action'>> = {
+	(args: FunctionArgs<Action>): Promise<FunctionReturnType<Action>>;
+	isLoading: boolean;
+	error: Error | undefined;
+};
+
 const _contextKey = '$$_convexClient';
 
 export const useConvexClient = (): ConvexClient => {
@@ -200,6 +212,7 @@ function parseArgs(
 	if (typeof args === 'function') {
 		args = args();
 	}
+	// @ts-expect-error Typesystem chokes on this 
 	return $state.snapshot(args);
 }
 
@@ -211,4 +224,92 @@ function parseOptions<Query extends FunctionReference<'query'>>(
 		options = options();
 	}
 	return $state.snapshot(options);
+}
+
+/**
+ * Create a mutation function with loading and error states.
+ *
+ * @param mutation - a FunctionReference like `api.dir1.dir2.filename.func`.
+ * @returns a function to call the mutation with automatic loading and error tracking.
+ */
+export function useMutation<Mutation extends FunctionReference<'mutation'>>(
+	mutation: Mutation
+): UseMutationReturn<Mutation> {
+	const client = useConvexClient();
+	if (typeof mutation === 'string') {
+		throw new Error('Mutation must be a functionReference object, not a string');
+	}
+
+	const state = $state({
+		isLoading: false,
+		error: undefined as Error | undefined
+	});
+
+	const mutationFn = async (args: FunctionArgs<Mutation>) => {
+		state.isLoading = true;
+		state.error = undefined;
+		try {
+			const result = await client.mutation(mutation, args);
+			return result;
+		} catch (e) {
+			const error = e instanceof Error ? e : new Error(String(e));
+			state.error = error;
+			throw error;
+		} finally {
+			state.isLoading = false;
+		}
+	};
+
+	return Object.assign(mutationFn, {
+		get isLoading() {
+			return state.isLoading;
+		},
+		get error() {
+			return state.error;
+		}
+	}) as UseMutationReturn<Mutation>;
+}
+
+/**
+ * Create an action function with loading and error states.
+ *
+ * @param action - a FunctionReference like `api.dir1.dir2.filename.func`.
+ * @returns a function to call the action with automatic loading and error tracking.
+ */
+export function useAction<Action extends FunctionReference<'action'>>(
+	action: Action
+): UseActionReturn<Action> {
+	const client = useConvexClient();
+	if (typeof action === 'string') {
+		throw new Error('Action must be a functionReference object, not a string');
+	}
+
+	const state = $state({
+		isLoading: false,
+		error: undefined as Error | undefined
+	});
+
+	const actionFn = async (args: FunctionArgs<Action>) => {
+		state.isLoading = true;
+		state.error = undefined;
+		try {
+			const result = await client.action(action, args);
+			return result;
+		} catch (e) {
+			const error = e instanceof Error ? e : new Error(String(e));
+			state.error = error;
+			throw error;
+		} finally {
+			state.isLoading = false;
+		}
+	};
+
+	return Object.assign(actionFn, {
+		get isLoading() {
+			return state.isLoading;
+		},
+		get error() {
+			return state.error;
+		}
+	}) as UseActionReturn<Action>;
 }

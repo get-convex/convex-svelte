@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { PUBLIC_CONVEX_URL } from '$env/static/public';
-	import { setupConvex } from '../lib/index.js';
+	import { setupConvex } from '$lib/index.js';
 
 	const { children } = $props();
 	setupConvex(PUBLIC_CONVEX_URL);

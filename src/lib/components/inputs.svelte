@@ -1,12 +1,11 @@
 <script lang="ts">
-	import { useQuery, useConvexClient } from '$lib/client.svelte.js';
-	import type { Doc } from '../../convex/_generated/dataModel.js';
-	import { api } from '../../convex/_generated/api.js';
+	import { useConvexClient, useQuery } from '$lib/client.svelte.js';
+	import { api } from '$lib/convex/_generated/api.js';
 
 	const convex = useConvexClient();
 	const serverNumbers = useQuery(api.numbers.get, {});
 
-	let numbers = $state(null);
+	let numbers = $state<{ a: number; b: number; c: number } | null>(null);
 	// Have some changes not yet been sent?
 	let hasUnsentChanges = $state(false);
 	// Does delivered server state not yet reflect all local changes?
@@ -44,7 +43,11 @@
 		}
 	}
 
-	function handleNumericInput(prop, e) {
+	function handleNumericInput(
+		prop: 'a' | 'b' | 'c',
+		e: Event & { currentTarget: HTMLInputElement }
+	) {
+		if (!numbers) return;
 		numbers[prop] = e.currentTarget.valueAsNumber;
 		publishChanges();
 	}
@@ -83,9 +86,9 @@
 		<div>
 			<p>Server values:</p>
 			<ul>
-				<li>a: {serverNumbers.data.a}</li>
-				<li>b: {serverNumbers.data.b}</li>
-				<li>c: {serverNumbers.data.c}</li>
+				<li>a: {serverNumbers.data?.a}</li>
+				<li>b: {serverNumbers.data?.b}</li>
+				<li>c: {serverNumbers.data?.c}</li>
 			</ul>
 		</div>
 	{/if}
