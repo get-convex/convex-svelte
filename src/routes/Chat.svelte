@@ -16,10 +16,14 @@
 	let toSend = $state('');
 	let author = $state('me');
 
-	const messages = useQuery(
-		api.messages.list,
-		() => ({ muteWords: muteWords }),
-		() => ({ initialData: initialMessages, keepPreviousData: useStale })
+	let skipQuery = $state(false);
+
+	const messages = $derived(
+		useQuery(
+			api.messages.list,
+			() => (skipQuery ? 'skip' : { muteWords: muteWords }),
+			() => ({ initialData: initialMessages, keepPreviousData: useStale })
+		)
 	);
 
 	const client = useConvexClient();
@@ -51,6 +55,10 @@
 		<label for="useStale"> Display old results while loading: </label>
 		<input type="checkbox" id="useStale" name="useStale" bind:checked={useStale} />
 	</div>
+	<div>
+		<label for="skipQuery"> Skip query: </label>
+		<input type="checkbox" id="skipQuery" name="skipQuery" bind:checked={skipQuery} />
+	</div>
 	<form onsubmit={onSubmit}>
 		<input type="text" id="author" name="author" bind:value={author} />
 		<input type="text" id="body" name="body" bind:value={toSend} />
@@ -60,7 +68,7 @@
 	{#if messages.isLoading}
 		Loading...
 	{:else if messages.error}
-		failed to load
+		failed to load {messages.error}
 	{:else}
 		<ul class="messages" class:stale={messages.isStale}>
 			<ul>
