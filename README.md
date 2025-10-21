@@ -65,29 +65,60 @@ and [Chat.svelte](src/routes/Chat.svelte) for how to use `useQuery()`
 Running a mutation looks like
 
 ```svelte
-<script>
-import { api } from "../../convex/_generated/api.js"; // depending on file location
-import { useConvexClient, useQuery } from "convex-svelte";
-const client = useConvexClient();
+<script lang="ts">
+	import { api } from '../../convex/_generated/api.js'; // depending on file location
+	import { useConvexClient } from 'convex-svelte';
+	const client = useConvexClient();
 
-let toSend = $state('');
-let author = $state('me');
+	let toSend = $state('');
+	let author = $state('me');
 
-function onSubmit(e: SubmitEvent) {
-	const data = Object.fromEntries(new FormData(e.target as HTMLFormElement).entries());
-	client.mutation(api.messages.send, {
-		author: data.author as string,
-		body: data.body as string
-	});
-}
+	function handleSubmit(event: SubmitEvent) {
+		event.preventDefault();
+
+		const data = Object.fromEntries(new FormData(event.target as HTMLFormElement).entries());
+		client.mutation(api.messages.send, {
+			author: data.author as string,
+			body: data.body as string
+		});
+	}
 </script>
 
-<form on:submit|preventDefault={onSubmit}>
-	<input type="text" id="author" name="author" />
-	<input type="text" id="body" name="body" bind:value={toSend} />
+<form onsubmit={handleSubmit}>
+	<input type="text" name="author" bind:value={author} />
+	<input type="text" name="body" bind:value={toSend} />
 	<button type="submit" disabled={!toSend}>Send</button>
 </form>
 ```
+
+### Conditionally skipping queries
+
+You can conditionally skip a query by returning the string `'skip'` from the arguments function.
+This is useful when a query depends on some condition, like authentication state or user input.
+
+```svelte
+<script lang="ts">
+import { useQuery } from "convex-svelte";
+import { api } from "../convex/_generated/api.js";
+
+let auth = $state({ isAuthenticated: true });
+
+const activeUserResponse = useQuery(
+  api.users.queries.getActiveUser,
+  () => (auth.isAuthenticated ? {} : 'skip')
+);
+</script>
+
+{#if activeUserResponse.isLoading}
+  Loading user...
+{:else if activeUserResponse.error}
+  Error: {activeUserResponse.error}
+{:else if activeUserResponse.data}
+  Welcome, {activeUserResponse.data.name}!
+{/if}
+```
+
+When a query is skipped, `isLoading` will be `false`, `error` will be `null`, and `data` will be `undefined`.
 
 ### Server-side rendering
 
