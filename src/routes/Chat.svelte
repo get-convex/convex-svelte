@@ -18,12 +18,10 @@
 
 	let skipQuery = $state(false);
 
-	const messages = $derived(
-		useQuery(
-			api.messages.list,
-			() => (skipQuery ? 'skip' : { muteWords: muteWords }),
-			() => ({ initialData: initialMessages, keepPreviousData: useStale })
-		)
+	const messages = useQuery(
+		api.messages.list,
+		() => (skipQuery ? 'skip' : { muteWords: muteWords }),
+		() => ({ initialData: initialMessages, keepPreviousData: useStale })
 	);
 
 	const client = useConvexClient();
