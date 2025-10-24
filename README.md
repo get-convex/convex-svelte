@@ -161,6 +161,16 @@ export const load = (async () => {
 
 Combining specifying `initialData` and either setting the `keepPreviousData` option to true or never modifying the arguments passed to a query should be enough to avoid ever seeing a loading state for a `useQuery()`.
 
+### Troubleshooting
+
+#### effect_in_teardown Error
+
+If you encounter `effect_in_teardown` errors when using `useQuery` in components that can be conditionally rendered (like dialogs, modals, or popups), this is caused by wrapping `useQuery` in a `$derived` block that depends on reactive state.
+
+When `useQuery` is wrapped in `$derived`, state changes during component cleanup can trigger re-evaluation of the `$derived`, which attempts to create a new `useQuery` instance. Since `useQuery` internally creates a `$effect`, and effects cannot be created during cleanup, this throws an error.
+
+Use [Conditionally skipping queries](#conditionally-skipping-queries) instead. By calling `useQuery` unconditionally at the top level and passing a function that returns `'skip'`, the function is evaluated inside `useQuery`'s own effect tracking, preventing query recreation during cleanup.
+
 ### Deploying a Svelte App
 
 In production build pipelines use the build command
