@@ -36,17 +36,9 @@ export const setupConvex = (url: string, options: ConvexClientOptions = {}) => {
 	$effect(() => () => client.close());
 };
 
-/* --------------------------------------------------------- */
-/* ------------------------- skip -------------------------- */
-/* --------------------------------------------------------- */
-
 // Internal sentinel for "skip" so we don't pass the literal string through everywhere
 const SKIP = Symbol('convex.useQuery.skip');
 type Skip = typeof SKIP;
-
-/* --------------------------------------------------------- */
-/* ------------------------ types -------------------------- */
-/* --------------------------------------------------------- */
 
 type UseQueryOptions<Query extends FunctionReference<'query'>> = {
 	// Use this data and assume it is up to date (typically for SSR and hydration)
@@ -60,10 +52,7 @@ type UseQueryReturn<Query extends FunctionReference<'query'>> =
 	| { data: undefined; error: Error; isLoading: false; isStale: boolean }
 	| { data: FunctionReturnType<Query>; error: undefined; isLoading: false; isStale: boolean };
 
-/* --------------------------------------------------------- */
-/* ---------------------- useQuery() ----------------------- */
-/* --------------------------------------------------------- */
-
+// Note that swapping out the current Convex client is not supported.
 /**
  * Subscribe to a Convex query and return a reactive query result object.
  * Pass reactive args object or a closure returning args to update args reactively.
@@ -88,8 +77,11 @@ export function useQuery<Query extends FunctionReference<'query'>>(
 
 	const state: {
 		result: FunctionReturnType<Query> | Error | undefined;
+		// The last result we actually received, if this query has ever received one.
 		lastResult: FunctionReturnType<Query> | Error | undefined;
+		// The args (query key) of the last result that was received.
 		argsForLastResult: FunctionArgs<Query> | Skip | undefined;
+		// If the args have never changed, fine to use initialData if provided.
 		haveArgsEverChanged: boolean;
 	} = $state({
 		result: parseOptions(options).initialData,
@@ -101,10 +93,10 @@ export function useQuery<Query extends FunctionReference<'query'>>(
 	// When args change we need to unsubscribe to the old query and subscribe
 	// to the new one.
 	$effect(() => {
-		const currentArgs = parseArgs(args);
+		const argsObject = parseArgs(args);
 
 		// If skipped, don't create any subscription
-		if (currentArgs === SKIP) {
+		if (argsObject === SKIP) {
 			// Clear transient result to mimic React: not loading, no data
 			state.result = undefined;
 			state.argsForLastResult = SKIP;
@@ -113,16 +105,16 @@ export function useQuery<Query extends FunctionReference<'query'>>(
 
 		const unsubscribe = client.onUpdate(
 			query,
-			currentArgs,
+			argsObject,
 			(dataFromServer) => {
 				const copy = structuredClone(dataFromServer);
 				state.result = copy;
-				state.argsForLastResult = currentArgs;
+				state.argsForLastResult = argsObject;
 				state.lastResult = copy;
 			},
 			(e: Error) => {
 				state.result = e;
-				state.argsForLastResult = currentArgs;
+				state.argsForLastResult = argsObject;
 				const copy = structuredClone(e);
 				state.lastResult = copy;
 			}
@@ -132,10 +124,10 @@ export function useQuery<Query extends FunctionReference<'query'>>(
 		return unsubscribe;
 	});
 
-	/* 
-  ** staleness & args tracking **
-  * Are the args (the query key) the same as the last args we received a result for?
-  */
+	/*
+	 ** staleness & args tracking **
+	 * Are the args (the query key) the same as the last args we received a result for?
+	 */
 	const currentArgs = $derived(parseArgs(args));
 	const initialArgs = parseArgs(args);
 
@@ -167,10 +159,10 @@ export function useQuery<Query extends FunctionReference<'query'>>(
 		}
 	});
 
-	/* 
-  ** compute sync result **
-  * Return value or undefined; never an error object.
-  */
+	/*
+	 ** compute sync result **
+	 * Return value or undefined; never an error object.
+	 */
 	const syncResult: FunctionReturnType<Query> | undefined = $derived.by(() => {
 		if (isSkipped) return undefined;
 
@@ -222,15 +214,14 @@ export function useQuery<Query extends FunctionReference<'query'>>(
 	});
 
 	/*
-  ** public shape **
-  * This TypeScript cast promises data is not undefined if error and isLoading are checked first.
-  */
+	 ** public shape **
+	 * This TypeScript cast promises data is not undefined if error and isLoading are checked first.
+	 */
 	return {
 		get data() {
 			return data;
 		},
 		get isLoading() {
-			// Important: when skipped, this should be false (match React)
 			return isSkipped ? false : error === undefined && data === undefined;
 		},
 		get error() {
@@ -242,11 +233,9 @@ export function useQuery<Query extends FunctionReference<'query'>>(
 	} as UseQueryReturn<Query>;
 }
 
-/* --------------------------------------------------------- */
-/* --------------------- helpers --------------------------- */
-/* --------------------------------------------------------- */
-
-// args can be an object, "skip", or a closure returning either
+/**
+ *  args can be an object, "skip", or a closure returning either 
+ **/
 function parseArgs(
 	args: Record<string, Value> | 'skip' | (() => Record<string, Value> | 'skip')
 ): Record<string, Value> | Skip {
