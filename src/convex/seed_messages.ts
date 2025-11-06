@@ -29,5 +29,11 @@ export default [
 		_id: '2w7d7p8ysmtr6njf4yejj0jy9hsjar0',
 		author: 'Arnold',
 		body: 'While you were talking I added a feature to the product'
-	}
+	},
+	{
+		_creationTime: 1755750014686.7732,
+		_id: "j572hze30nnbvzcph9836fetmh7p3zgk",
+		author: "Tyler Petrov",
+		body: "We have the new Remote Functions based API!",
+	  }
 ];
