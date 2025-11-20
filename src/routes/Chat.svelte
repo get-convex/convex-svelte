@@ -33,12 +33,13 @@
 		return new Date(ts).toLocaleString();
 	}
 	function toggleExpand(messageId: string) {
-		if (expandedMessages.has(messageId)) {
-			expandedMessages.delete(messageId);
+		const newSet = new Set(expandedMessages);
+		if (newSet.has(messageId)) {
+			newSet.delete(messageId);
 		} else {
-			expandedMessages.add(messageId);
+			newSet.add(messageId);
 		}
-		expandedMessages = expandedMessages;
+		expandedMessages = newSet;
 	}
 	function isLongMessage(body: string): boolean {
 		return body.length > 150 || body.split('\n').length > 3;
