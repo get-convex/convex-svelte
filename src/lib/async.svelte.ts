@@ -117,8 +117,7 @@ export function convexQuery<
     query: Query,
     args: Query['_args'],
 ) {
-    const { env, ...rest } = args
-    const cacheKey = generateCacheKey(query, rest)
+    const cacheKey = generateCacheKey(query, args)
     const createQuery = () => new ConvexQuery({ query, args, key: cacheKey })
 
     const cache = getConvexQueryCache()
