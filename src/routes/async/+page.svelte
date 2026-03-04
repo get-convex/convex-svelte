@@ -16,7 +16,7 @@
 		author: 'me'
 	});
 
-	const messages = $derived(await convexQuery(api.messages.list, { muteWords: muteWords }));
+	const messages = $derived(convexQuery(api.messages.list, { muteWords: muteWords }));
 
 	const client = useConvexClient();
 
@@ -32,60 +32,70 @@
 	}
 </script>
 
-<div class="chat">
-	<header class="header">
-		<h2>Chat</h2>
-		<span class="badge">Thenable Query</span>
-	</header>
+<svelte:boundary>
+	<div class="chat">
+		<header class="header">
+			<h2>Chat</h2>
+			<span class="badge">Thenable Query</span>
+		</header>
 
-	<div class="toolbar">
-		<div class="filters">
-			<label for="muteWords">Hide messages with:</label>
+		<div class="toolbar">
+			<div class="filters">
+				<label for="muteWords">Hide messages with:</label>
+				<input
+					type="text"
+					id="muteWords"
+					name="muteWords"
+					placeholder="e.g. vim, emacs"
+					bind:value={muteWordsString}
+				/>
+			</div>
+		</div>
+
+		<div class="messagesWrap">
+			<ul class="messages" aria-live="polite">
+				{#each await messages as message (message._id)}
+					<li class="message">
+						<div class="avatar" aria-hidden="true">{message.author?.slice(0, 1).toUpperCase()}</div>
+						<div class="bubble">
+							<div class="meta">
+								<span class="author">{message.author}</span>
+								<span class="time">{formatDate(message._creationTime)}</span>
+							</div>
+							<div class="body">{message.body}</div>
+						</div>
+					</li>
+				{/each}
+			</ul>
+		</div>
+
+		<form class="composer" onsubmit={onSubmit}>
 			<input
 				type="text"
-				id="muteWords"
-				name="muteWords"
-				placeholder="e.g. vim, emacs"
-				bind:value={muteWordsString}
+				id="author"
+				name="author"
+				bind:value={messageForm.author}
+				placeholder="Your name"
 			/>
-		</div>
+			<input
+				type="text"
+				id="body"
+				name="body"
+				bind:value={messageForm.body}
+				placeholder="Write a message…"
+			/>
+			<button type="submit" disabled={!messageForm.body.trim()}>Send</button>
+		</form>
 	</div>
-
-	<div class="messagesWrap">
-		<ul class="messages" aria-live="polite">
-			{#each messages as message (message._id)}
-				<li class="message">
-					<div class="avatar" aria-hidden="true">{message.author?.slice(0, 1).toUpperCase()}</div>
-					<div class="bubble">
-						<div class="meta">
-							<span class="author">{message.author}</span>
-							<span class="time">{formatDate(message._creationTime)}</span>
-						</div>
-						<div class="body">{message.body}</div>
-					</div>
-				</li>
-			{/each}
-		</ul>
-	</div>
-
-	<form class="composer" onsubmit={onSubmit}>
-		<input
-			type="text"
-			id="author"
-			name="author"
-			bind:value={messageForm.author}
-			placeholder="Your name"
-		/>
-		<input
-			type="text"
-			id="body"
-			name="body"
-			bind:value={messageForm.body}
-			placeholder="Write a message…"
-		/>
-		<button type="submit" disabled={!messageForm.body.trim()}>Send</button>
-	</form>
-</div>
+	
+	{#snippet pending()}
+		<div>Loading messages...</div>
+	{/snippet}
+	{#snippet failed(error, reset)}
+		<p>Error: {error}</p>
+		<button onclick={reset}>oops! try again</button>
+	{/snippet}
+</svelte:boundary>
 
 <style>
 	.chat {

@@ -34,6 +34,6 @@ export default [
 		_creationTime: 1755750014686.7732,
 		_id: "j572hze30nnbvzcph9836fetmh7p3zgk",
 		author: "Tyler Petrov",
-		body: "We have the new Remote Functions based API!",
+		body: "We have an async handler!",
 	  }
 ];

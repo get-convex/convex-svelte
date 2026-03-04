@@ -8,6 +8,7 @@ import {
 } from 'convex/server';
 import { convexToJson, type Value } from 'convex/values';
 import { BROWSER } from 'esm-env';
+import { setConvexQueryCache } from './async.svelte.js';
 
 const _contextKey = '$$_convexClient';
 
@@ -33,6 +34,7 @@ export const setupConvex = (url: string, options: ConvexClientOptions = {}) => {
 
 	const client = new ConvexClient(url, optionsWithDefaults);
 	setConvexClientContext(client);
+	setConvexQueryCache(new Map());
 	$effect(() => () => client.close());
 };
 
