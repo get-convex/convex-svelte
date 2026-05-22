@@ -17,7 +17,8 @@
 		"moduleResolution": "bundler",
 		"isolatedModules": true,
 		"skipLibCheck": true,
-		"noEmit": true
+		"noEmit": true,
+		"types": ["node"]
 	},
 	"include": ["./**/*"],
 	"exclude": ["./_generated"]

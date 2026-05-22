@@ -1,0 +1,45 @@
+name: Changeset check
+
+on:
+  pull_request:
+    branches: ['**']
+    paths:
+      - 'src/**'
+      - 'package.json'
+      - 'svelte.config.js'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  changeset:
+    name: Changeset check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v6.0.8
+        with:
+          version: 11.1.2
+
+      - uses: actions/setup-node@v6.4.0
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check for changesets
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if ! pnpm changeset status --since="origin/${BASE_REF}" 2>&1; then
+            echo "::warning::No changeset found. If this PR includes package changes that need a release, run 'pnpm changeset' to add one."
+          fi

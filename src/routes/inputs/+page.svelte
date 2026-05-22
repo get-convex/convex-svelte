@@ -3,27 +3,17 @@
 </script>
 
 <svelte:head>
-	<title>Home</title>
+	<title>Inputs</title>
 	<meta name="description" content="Svelte demo app" />
 </svelte:head>
 
-<section>
-	<h1>Modifying several inputs</h1>
-	<p>Any user have complete control over these inputs but might change them quickly.</p>
+<div class="mx-auto max-w-2xl">
+	<h1 class="mb-2 text-3xl font-bold text-gray-900">Modifying Several Inputs</h1>
+	<p class="mb-8 text-gray-600">
+		Any user has complete control over these inputs but might change them quickly.
+	</p>
 
-	<Inputs />
-</section>
-
-<style>
-	section {
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		flex: 0.6;
-	}
-
-	h1 {
-		width: 100%;
-		text-align: center;
-	}
-</style>
+	<div class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+		<Inputs />
+	</div>
+</div>

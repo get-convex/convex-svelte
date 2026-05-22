@@ -1,8 +1,12 @@
-name: Publish Approved Pull Requests
+name: Preview Publish Approved Pull Requests
 # from https://github.com/stackblitz-labs/pkg.pr.new?tab=readme-ov-file
 on:
   pull_request_review:
     types: [submitted]
+
+permissions:
+  contents: read
+  pull-requests: read
 
 jobs:
   check:
@@ -14,7 +18,7 @@ jobs:
     steps:
       - name: Check permissions
         id: checkPermissions
-        uses: actions-cool/check-user-permission@v2
+        uses: actions-cool/check-user-permission@v2.4.0
         with:
           # In this example, the approver must have the write access
           # to the repository to trigger the package preview.
@@ -27,16 +31,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6.0.2
 
-      - run: corepack enable
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v6.0.8
         with:
-          node-version: 20
-          cache: 'npm'
+          version: 11.1.2
+
+      - uses: actions/setup-node@v6.4.0
+        with:
+          node-version: 24
 
       - name: Install dependencies
-        run: npm install
+        run: pnpm install --frozen-lockfile
 
-      - run: npx pkg-pr-new publish
-      - run: npx pkg-pr-new publish --template '.'
+      - name: Build
+        run: pnpm build
+
+      - name: Publish package preview
+        run: pnpm dlx pkg-pr-new publish --template '.'

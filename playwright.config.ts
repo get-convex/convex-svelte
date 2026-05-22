@@ -83,7 +83,7 @@ export default defineConfig({
 	],
 
 	/* Run your local dev server before starting the tests */ webServer: {
-		command: 'npm run build && npm run preview',
+		command: 'pnpm build && pnpm preview',
 		port: 4173
 	}
 });

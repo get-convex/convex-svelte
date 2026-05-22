@@ -1,9 +1,11 @@
 <script lang="ts">
-	import { useQuery, useConvexClient } from '$lib/client.svelte.js';
-	import type { Doc } from '../convex/_generated/dataModel.js';
+	import { usePaginatedQuery, useConvexClient } from '$lib/index.js';
 	import { api } from '../convex/_generated/api.js';
+	import type { FunctionReturnType } from 'convex/server';
 
-	const { initialMessages = [] as Doc<'messages'>[] } = $props();
+	const {
+		initialMessages
+	}: { initialMessages: FunctionReturnType<typeof api.messages.paginatedList> } = $props();
 
 	let useStale = $state(true);
 	let muteWordsString = $state('');
@@ -18,10 +20,14 @@
 
 	let skipQuery = $state(false);
 
-	const messages = useQuery(
-		api.messages.list,
+	const messages = usePaginatedQuery(
+		api.messages.paginatedList,
 		() => (skipQuery ? 'skip' : { muteWords: muteWords }),
-		() => ({ initialData: initialMessages, keepPreviousData: useStale })
+		() => ({
+			initialNumItems: 3,
+			initialData: initialMessages,
+			keepPreviousData: useStale
+		})
 	);
 
 	const client = useConvexClient();
@@ -40,127 +46,90 @@
 	}
 </script>
 
-<div class="chat">
-	<label for="muteWords"> Hide messages containing these phrases: </label>
-	<input
-		type="text"
-		id="muteWords"
-		name="muteWords"
-		placeholder="vim, emacs"
-		bind:value={muteWordsString}
-	/>
-	<div>
-		<label for="useStale"> Display old results while loading: </label>
-		<input type="checkbox" id="useStale" name="useStale" bind:checked={useStale} />
+<div class="flex w-full flex-col items-center gap-4">
+	<div class="flex w-full flex-col gap-3">
+		<div class="flex items-center gap-2">
+			<label for="muteWords" class="text-sm font-medium text-gray-700"
+				>Hide messages containing:</label
+			>
+			<input
+				type="text"
+				id="muteWords"
+				name="muteWords"
+				placeholder="vim, emacs"
+				bind:value={muteWordsString}
+				class="rounded-md border border-gray-300 px-3 py-1.5 text-sm shadow-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 focus:outline-none"
+			/>
+		</div>
+		<div class="flex items-center gap-2">
+			<input
+				type="checkbox"
+				id="useStale"
+				name="useStale"
+				bind:checked={useStale}
+				class="rounded border-gray-300 text-blue-600"
+			/>
+			<label for="useStale" class="text-sm text-gray-700">Display old results while loading</label>
+		</div>
+		<div class="flex items-center gap-2">
+			<input
+				type="checkbox"
+				id="skipQuery"
+				name="skipQuery"
+				bind:checked={skipQuery}
+				class="rounded border-gray-300 text-blue-600"
+			/>
+			<label for="skipQuery" class="text-sm text-gray-700">Skip query</label>
+		</div>
 	</div>
-	<div>
-		<label for="skipQuery"> Skip query: </label>
-		<input type="checkbox" id="skipQuery" name="skipQuery" bind:checked={skipQuery} />
-	</div>
-	<form onsubmit={onSubmit}>
-		<input type="text" id="author" name="author" bind:value={author} />
-		<input type="text" id="body" name="body" bind:value={toSend} />
-		<button type="submit" disabled={!toSend}>Send</button>
+
+	<form onsubmit={onSubmit} class="flex w-full max-w-lg items-center gap-2">
+		<input
+			type="text"
+			id="author"
+			name="author"
+			bind:value={author}
+			class="w-24 rounded-md border border-gray-300 px-3 py-1.5 text-sm shadow-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 focus:outline-none"
+		/>
+		<input
+			type="text"
+			id="body"
+			name="body"
+			bind:value={toSend}
+			class="flex-1 rounded-md border border-gray-300 px-3 py-1.5 text-sm shadow-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 focus:outline-none"
+		/>
+		<button
+			type="submit"
+			disabled={!toSend}
+			class="rounded-md bg-blue-600 px-4 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+			>Send</button
+		>
 	</form>
 
 	{#if messages.isLoading}
-		Loading...
+		<p class="py-4 text-sm text-gray-500">Loading...</p>
 	{:else if messages.error}
-		failed to load {messages.error}
+		<p class="py-4 text-sm text-red-600">Failed to load: {messages.error}</p>
 	{:else}
-		<ul class="messages" class:stale={messages.isStale}>
-			<ul>
-				{#each messages.data as message}
-					<li>
-						<span>{message.author}</span>
-						<span>{message.body}</span>
-						<span>{formatDate(message._creationTime)}</span>
-					</li>
-				{/each}
-			</ul>
+		<ul class="w-full divide-y divide-gray-100">
+			{#each messages.results as message (message._id)}
+				<li class="flex items-baseline gap-4 py-2">
+					<span class="w-24 shrink-0 break-words text-sm font-semibold text-gray-900"
+						>{message.author}</span
+					>
+					<span class="min-w-0 flex-1 break-words text-sm text-gray-700">{message.body}</span>
+					<span class="shrink-0 text-xs whitespace-nowrap text-gray-400"
+						>{formatDate(message._creationTime)}</span
+					>
+				</li>
+			{/each}
 		</ul>
+		<button
+			onclick={() => messages.loadMore(3)}
+			disabled={messages.status !== 'CanLoadMore'}
+			class="rounded-md border border-gray-300 bg-white px-4 py-1.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+		>
+			Load more
+		</button>
 	{/if}
 </div>
-
-<style>
-	.chat {
-		display: flex;
-		align-items: center;
-		flex-direction: column;
-		border-top: 1px solid rgba(0, 0, 0, 0.1);
-		border-bottom: 1px solid rgba(0, 0, 0, 0.1);
-		margin: 1rem 0;
-		width: 100%;
-	}
-
-	.stale {
-		color: rgba(0, 0, 0, 0.8);
-	}
-
-	ul {
-		display: flex;
-		flex-direction: column;
-		align-items: flex-start;
-		width: 100%;
-		padding: 0;
-	}
-
-	li {
-		display: flex;
-		width: 100%;
-		gap: 1rem;
-		justify-content: space-between;
-		flex-wrap: wrap;
-	}
-
-	li span:nth-child(1) {
-		flex: 0 0 100px;
-		overflow-wrap: break-word;
-		min-width: 0;
-		font-weight: bold;
-	}
-	li span:nth-child(2) {
-		flex: 1 0 160px;
-		overflow-wrap: break-word;
-		min-width: 0;
-	}
-	li span:nth-child(3) {
-		flex: 0 0;
-		white-space: nowrap;
-	}
-
-	button {
-		padding: 0.3rem;
-		margin: 0.2rem;
-		cursor: pointer;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		border: 0;
-		background-color: transparent;
-		touch-action: manipulation;
-	}
-
-	button:hover {
-		background-color: var(--color-bg-1);
-	}
-	button:active {
-		opacity: 0.6;
-	}
-
-	form {
-		display: flex;
-		align-items: center;
-		max-width: 500px;
-	}
-
-	input#muteWords {
-		width: 40%;
-		max-width: 400px;
-		min-width: 200px;
-	}
-
-	form input {
-		margin: 4px;
-	}
-</style>

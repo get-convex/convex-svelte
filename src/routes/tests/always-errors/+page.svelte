@@ -1,11 +1,17 @@
 <script lang="ts">
-	import { useQuery, useConvexClient } from '$lib/client.svelte.js';
-	import type { Doc } from '../../../convex/_generated/dataModel.js';
+	import { useQuery } from '$lib/client.svelte.js';
 	import { api } from '../../../convex/_generated/api.js';
 
 	const foo = useQuery(api.messages.error, {});
 
-	function fail(msg: any) {
+	// Extract individual properties so the discriminated union doesn't narrow
+	// cross-property checks to `never`. This test page intentionally validates
+	// that impossible runtime states never occur.
+	const fooData = $derived(foo.data);
+	const fooError = $derived(foo.error);
+	const fooIsLoading = $derived(foo.isLoading);
+
+	function fail(msg: string) {
 		setTimeout(() => {
 			throw new Error(msg);
 		}, 0);
@@ -13,35 +19,48 @@
 	}
 </script>
 
-<section>
-	<h1>This query always errors</h1>
+<section class="space-y-4">
+	<h1 class="text-2xl font-bold text-gray-900">This query always errors</h1>
 
-	{#if foo.data}
-		<p>query has data.</p>
+	{#if fooData}
+		<p class="text-sm text-green-700">query has data.</p>
 	{/if}
-	{#if foo.error}
-		<p>query errored.</p>
+	{#if fooError}
+		<p class="text-sm text-red-700">query errored.</p>
 	{/if}
-	{#if foo.isLoading}
-		<p>query is loading.</p>
+	{#if fooIsLoading}
+		<p class="text-sm text-blue-700">query is loading.</p>
 	{/if}
-	{#if foo.error && foo.isLoading}
-		<p>{fail('query errored and is loading. (impossible state unless useStale were true)')}</p>
+	{#if fooError && fooIsLoading}
+		<p class="text-sm text-red-700">
+			{fail('query errored and is loading. (impossible state unless useStale were true)')}
+		</p>
 	{/if}
-	{#if foo.data && foo.isLoading}
-		<p>{fail('query has data and is loading. (impossible state unless useStale were true)')}</p>
+	{#if fooData && fooIsLoading}
+		<p class="text-sm text-red-700">
+			{fail('query has data and is loading. (impossible state unless useStale were true)')}
+		</p>
 	{/if}
-	{#if foo.data && foo.error}
-		<p>query errored and has data. (impossible state)</p>
+	{#if fooData && fooError}
+		<p class="text-sm text-red-700">query errored and has data. (impossible state)</p>
 	{/if}
-	{#if !foo.isLoading && !foo.error && !foo.data}
-		<p>{fail('query is not loading and did not error and has no data. (impossible state)')}</p>
+	{#if !fooIsLoading && !fooError && !fooData}
+		<p class="text-sm text-red-700">
+			{fail('query is not loading and did not error and has no data. (impossible state)')}
+		</p>
 	{/if}
-	{#if foo.isLoading && foo.error && foo.data}
-		<p>{fail('query is loading and has error and has data. (impossible state)')}</p>
+	{#if fooIsLoading && fooError && fooData}
+		<p class="text-sm text-red-700">
+			{fail('query is loading and has error and has data. (impossible state)')}
+		</p>
 	{/if}
 
-	{#if foo.error}<p>error message:</p>
-		<code><pre> {foo.error.message} </pre></code>
+	{#if fooError}
+		<div class="rounded-lg border border-red-200 bg-red-50 p-4">
+			<p class="mb-2 text-sm font-medium text-red-800">error message:</p>
+			<code class="block overflow-x-auto rounded bg-red-100 p-2 font-mono text-xs text-red-900"
+				><pre>{fooError.message}</pre></code
+			>
+		</div>
 	{/if}
 </section>
