@@ -537,7 +537,7 @@ import { api } from '$convex/_generated/api';
 export const load = async () => ({
 	messages: await convexLoadPaginated(
 		api.messages.paginatedList,
-		{ muteWords: [] },
+		{ searchWords: [] },
 		{ initialNumItems: 10 }
 	)
 });

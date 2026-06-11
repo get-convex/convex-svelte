@@ -239,6 +239,23 @@ export class PaginatedQueryStateMachine<T> {
 	 * "empty loading" snapshot to keep SSR-rendered content visible.
 	 */
 	onUpdate(update: PaginatedQueryUpdate<T>): void {
+		if (
+			this.config.keepPreviousData &&
+			this.state.results.length > 0 &&
+			update.results.length === 0 &&
+			update.status === 'LoadingFirstPage'
+		) {
+			this.state = {
+				...this.state,
+				status: update.status,
+				isLoading: true,
+				error: undefined,
+				loadMore: update.loadMore
+			};
+			this.notify();
+			return;
+		}
+
 		// Hydration guard: if using initial data, ignore empty loading snapshots
 		// This keeps SSR-rendered content visible until real data arrives
 		if (
@@ -329,6 +346,16 @@ export class PaginatedQueryStateMachine<T> {
 	 */
 	getConfig(): Readonly<PaginatedQueryConfig<T>> {
 		return this.config;
+	}
+
+	/**
+	 * Update runtime options that may be provided reactively by framework wrappers.
+	 */
+	updateConfig(config: Partial<PaginatedQueryConfig<T>>): void {
+		this.config = {
+			...this.config,
+			...config
+		};
 	}
 
 	private computeIsLoading(status: PaginationStatus): boolean {

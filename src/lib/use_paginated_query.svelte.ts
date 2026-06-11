@@ -113,6 +113,10 @@ export function usePaginatedQuery<Query extends FunctionReference<'query'>>(
 			args as Record<string, Value> | 'skip' | (() => Record<string, Value> | 'skip')
 		);
 		const opts = parsePaginatedOptions<Query>(options);
+		machine.updateConfig({
+			initialNumItems: opts.initialNumItems,
+			keepPreviousData: opts.keepPreviousData
+		});
 
 		// Notify machine of args change
 		const argsKey =
