@@ -53,59 +53,90 @@
 	}
 </script>
 
-<div class="flex flex-col gap-6">
+<div class="flex flex-col">
 	{#if serverNumbers.isLoading || !numbers}
-		<p class="text-sm text-gray-500">Loading values...</p>
+		<div class="flex flex-col items-center justify-center gap-2 px-5 py-12">
+			<span
+				class="h-5 w-5 animate-spin rounded-full border-2 border-convex-ink/20 border-t-convex-purple"
+				aria-hidden="true"
+			></span>
+			<p class="text-sm text-convex-ink/50">Loading values…</p>
+		</div>
 	{:else}
-		<div class="grid gap-4 sm:grid-cols-3">
-			<div class="flex flex-col gap-1">
-				<label for="a" class="text-sm font-medium text-gray-700">Number a</label>
-				<input
-					id="a"
-					type="number"
-					oninput={(e) => handleNumericInput('a', e)}
-					value={numbers.a}
-					class="rounded-md border border-gray-300 px-3 py-1.5 text-sm shadow-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 focus:outline-none"
-				/>
-			</div>
-			<div class="flex flex-col gap-1">
-				<label for="b" class="text-sm font-medium text-gray-700">Number b</label>
-				<input
-					id="b"
-					type="number"
-					oninput={(e) => handleNumericInput('b', e)}
-					value={numbers.b}
-					class="rounded-md border border-gray-300 px-3 py-1.5 text-sm shadow-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 focus:outline-none"
-				/>
-			</div>
-			<div class="flex flex-col gap-1">
-				<label for="c" class="text-sm font-medium text-gray-700">Number c</label>
-				<input
-					id="c"
-					type="number"
-					oninput={(e) => handleNumericInput('c', e)}
-					value={numbers.c}
-					class="rounded-md border border-gray-300 px-3 py-1.5 text-sm shadow-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 focus:outline-none"
-				/>
-			</div>
+		<div
+			class="flex items-center justify-between border-b border-convex-ink/10 bg-convex-sand/40 px-5 py-3"
+		>
+			<span class="text-xs font-medium tracking-wide text-convex-ink/40 uppercase"
+				>Shared realtime state</span
+			>
+			{#if mutationInFlight || hasUnsavedChanges}
+				<span
+					class="inline-flex items-center gap-1.5 rounded-full bg-convex-yellow/20 px-2.5 py-1 text-xs font-semibold text-amber-700"
+				>
+					<span class="h-1.5 w-1.5 animate-pulse rounded-full bg-convex-yellow"></span>
+					Syncing…
+				</span>
+			{:else}
+				<span
+					class="inline-flex items-center gap-1.5 rounded-full bg-green-500/10 px-2.5 py-1 text-xs font-semibold text-green-700"
+				>
+					<span class="h-1.5 w-1.5 rounded-full bg-green-500"></span>
+					Synced
+				</span>
+			{/if}
 		</div>
 
-		<div class="grid gap-4 sm:grid-cols-2">
-			<div class="rounded-md bg-gray-50 p-4">
-				<p class="mb-2 text-sm font-semibold text-gray-800">Local values</p>
-				<ul class="space-y-1 text-sm text-gray-600">
-					<li>a: {numbers.a}</li>
-					<li>b: {numbers.b}</li>
-					<li>c: {numbers.c}</li>
-				</ul>
+		<div class="flex flex-col gap-6 px-5 py-5">
+			<div class="grid gap-4 sm:grid-cols-3">
+				{#each ['a', 'b', 'c'] as const as prop (prop)}
+					<div class="flex flex-col gap-1.5">
+						<label
+							for={prop}
+							class="text-xs font-semibold tracking-wide text-convex-ink/50 uppercase"
+							>Number {prop}</label
+						>
+						<input
+							id={prop}
+							type="number"
+							oninput={(e) => handleNumericInput(prop, e)}
+							value={numbers[prop]}
+							class="rounded-xl border border-convex-ink/15 bg-white px-3.5 py-2.5 font-mono text-base shadow-sm transition-colors focus:border-convex-purple focus:ring-2 focus:ring-convex-purple/20 focus:outline-none"
+						/>
+					</div>
+				{/each}
 			</div>
-			<div class="rounded-md bg-gray-50 p-4">
-				<p class="mb-2 text-sm font-semibold text-gray-800">Server values</p>
-				<ul class="space-y-1 text-sm text-gray-600">
-					<li>a: {serverNumbers.data?.a}</li>
-					<li>b: {serverNumbers.data?.b}</li>
-					<li>c: {serverNumbers.data?.c}</li>
-				</ul>
+
+			<div class="grid gap-4 sm:grid-cols-2">
+				<div class="rounded-xl border border-convex-ink/10 bg-convex-sand/40 p-4">
+					<p class="mb-3 text-xs font-semibold tracking-wide text-convex-ink/50 uppercase">
+						Local values
+					</p>
+					<ul class="space-y-1.5 font-mono text-sm">
+						{#each ['a', 'b', 'c'] as const as prop (prop)}
+							<li class="flex items-center justify-between">
+								<span class="text-convex-ink/50">{prop}</span>
+								<span class="font-semibold">{numbers[prop]}</span>
+							</li>
+						{/each}
+					</ul>
+				</div>
+				<div class="rounded-xl border border-convex-ink/10 bg-convex-sand/40 p-4">
+					<p class="mb-3 text-xs font-semibold tracking-wide text-convex-ink/50 uppercase">
+						Server values
+					</p>
+					<ul class="space-y-1.5 font-mono text-sm">
+						{#each ['a', 'b', 'c'] as const as prop (prop)}
+							<li class="flex items-center justify-between">
+								<span class="text-convex-ink/50">{prop}</span>
+								<span
+									class="font-semibold {serverNumbers.data?.[prop] !== numbers[prop]
+										? 'rounded bg-convex-yellow/30 px-1.5 text-amber-800'
+										: ''}">{serverNumbers.data?.[prop]}</span
+								>
+							</li>
+						{/each}
+					</ul>
+				</div>
 			</div>
 		</div>
 	{/if}
