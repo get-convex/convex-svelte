@@ -54,7 +54,36 @@ export function flushDeferredSubscriptions(): void {
 }
 
 export function getSingletonClient(): ConvexClient | null {
+	if (_singletonClient?.closed) {
+		_singletonClient = null;
+		_singletonUrl = null;
+		return null;
+	}
 	return _singletonClient;
+}
+
+/**
+ * Close the app-scoped ConvexClient and clear the singleton.
+ *
+ * The client is shared app-wide (Svelte context hooks, SSR transport,
+ * detached queries), so it is intentionally NOT closed when the component
+ * that called `setupConvex()` unmounts — doing so broke remounts and HMR.
+ * Call this for explicit teardown instead, e.g. in tests or when an
+ * embedded widget is removed from the page.
+ *
+ * After closing, the next `setupConvex()` / `initConvex()` call creates a
+ * fresh client (and may use a different deployment URL).
+ */
+export async function closeConvex(): Promise<void> {
+	const client = _singletonClient;
+	_singletonClient = null;
+	_singletonUrl = null;
+	// Restore defer mode so the next init cycle coordinates with setupAuth
+	// again instead of firing subscriptions immediately.
+	_deferredSubscriptions = [];
+	if (client && !client.closed) {
+		await client.close();
+	}
 }
 
 export function getSingletonUrl(): string | null {
@@ -102,10 +131,11 @@ export function _getServerToken(): string | undefined {
 }
 
 export function getConvexClient(): ConvexClient {
-	if (!_singletonClient) {
+	const client = getSingletonClient();
+	if (!client) {
 		throw new Error('Convex client not initialized. Call setupConvex() or initConvex() first.');
 	}
-	return _singletonClient;
+	return client;
 }
 
 /**

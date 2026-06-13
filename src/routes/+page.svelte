@@ -31,8 +31,8 @@
 			>
 		</h1>
 		<p class="max-w-lg text-lg text-convex-ink/60">
-			Real-time Convex integration for Svelte/SvelteKit. Every demo below is backed by live
-			queries — open a second tab and watch it sync.
+			Real-time Convex integration for Svelte/SvelteKit. Every demo below is backed by live queries
+			— open a second tab and watch it sync.
 		</p>
 	</div>
 

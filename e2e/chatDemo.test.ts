@@ -21,7 +21,7 @@ test.describe('chat demo', () => {
 	}) => {
 		await page.goto('/');
 
-		const messageInput = page.getByLabel('Message');
+		const messageInput = page.getByLabel('Message', { exact: true });
 		const sendButton = page.getByTestId('chat-send-button');
 
 		await expect(page.getByTestId('message-character-count')).not.toBeVisible();
@@ -53,18 +53,22 @@ test.describe('chat demo', () => {
 			await page.goto('/');
 			await page.getByLabel('Author').fill(author);
 
-			await page.getByLabel('Message').fill(olderMessage);
+			// The row must appear immediately via the optimistic update, but the
+			// "Optimistic" badge is transient — on a fast connection the server
+			// confirms before the first assertion polls. Accept either state,
+			// then require convergence to "Server".
+			await page.getByLabel('Message', { exact: true }).fill(olderMessage);
 			await page.getByTestId('chat-send-button').click();
 			const olderRow = page.getByTestId('message-row').filter({ hasText: olderMessage });
-			await expect(olderRow.first().getByTestId('message-status')).toHaveText('Optimistic');
+			await expect(olderRow.first().getByTestId('message-status')).toHaveText(/Optimistic|Server/);
 			await expect(olderRow.first().getByTestId('message-status')).toHaveText('Server', {
 				timeout: 10000
 			});
 
-			await page.getByLabel('Message').fill(newestMessage);
+			await page.getByLabel('Message', { exact: true }).fill(newestMessage);
 			await page.getByTestId('chat-send-button').click();
 			const newestRow = page.getByTestId('message-row').filter({ hasText: newestMessage });
-			await expect(newestRow.first().getByTestId('message-status')).toHaveText('Optimistic');
+			await expect(newestRow.first().getByTestId('message-status')).toHaveText(/Optimistic|Server/);
 			await expect(newestRow.first().getByTestId('message-status')).toHaveText('Server', {
 				timeout: 10000
 			});

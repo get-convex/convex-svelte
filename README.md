@@ -55,7 +55,7 @@ This will prompt you to log in, create a project, and save your deployment URLs.
 
 ### Setup
 
-Call `setupConvex()` once in a root layout component (e.g. `+layout.svelte`). This initializes a [`ConvexClient`](https://docs.convex.dev/api/classes/browser.ConvexClient), stores it in Svelte context so child components can access it, and automatically closes the connection when the component is destroyed.
+Call `setupConvex()` once in a root layout component (e.g. `+layout.svelte`). This initializes a [`ConvexClient`](https://docs.convex.dev/api/classes/browser.ConvexClient) and stores it in Svelte context so child components can access it. The client is app-scoped: it stays open for the lifetime of the app (remounts and HMR reuse the same connection) and supports a single deployment URL. For explicit teardown — e.g. in tests — call `closeConvex()`.
 
 ```svelte
 <!-- +layout.svelte -->
@@ -868,6 +868,7 @@ Import from `convex-svelte`:
 | `setupConvex(url, options?)`              | Function | Initialize the Convex client and store it in Svelte context. Call once in a root layout. Returns `ConvexClient`. |
 | `useConvexClient()`                       | Function | Retrieve the `ConvexClient` from Svelte context. Must be called during component initialization.                 |
 | `getConvexClient()`                       | Function | Retrieve the `ConvexClient` module singleton. Works anywhere — no Svelte context needed.                         |
+| `closeConvex()`                           | Function | Close the app-scoped client and clear the singleton. For explicit teardown, e.g. in tests. Returns `Promise`.    |
 | `useQuery(query, args, options?)`         | Function | Subscribe to a Convex query with reactive updates. Returns `UseQueryReturn`.                                     |
 | `UseQueryOptions<Query>`                  | Type     | Options for `useQuery`: `initialData`, `keepPreviousData`.                                                       |
 | `UseQueryReturn<Query>`                   | Type     | Return type of `useQuery`: `data`, `error`, `isLoading`, `isStale`.                                              |
@@ -888,6 +889,7 @@ Import from `convex-svelte/sveltekit`:
 | ------------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------- |
 | `initConvex(url, options?)`                 | Function | Create the `ConvexClient` singleton early. Only needed for [convexLoad SSR setup](#convexload-setup). |
 | `getConvexUrl()`                            | Function | Retrieve the deployment URL set by `initConvex()` or `setupConvex()`.                                 |
+| `closeConvex()`                             | Function | Close the app-scoped client and clear the singleton (also exported from `convex-svelte`).             |
 | `convexLoad(query, args, options?)`         | Function | Fetch data server-side, upgrade to live subscription on client.                                       |
 | `encodeConvexLoad`                          | Function | Transport encoder — use in `hooks.ts` (see [convexLoad Setup](#convexload-setup)).                    |
 | `decodeConvexLoad`                          | Function | Transport decoder — use in `hooks.ts` (see [convexLoad Setup](#convexload-setup)).                    |

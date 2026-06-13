@@ -50,15 +50,19 @@ test.describe('Paginated Query with SSR Initial Data', () => {
 			// Click load more
 			await page.getByTestId('load-more-btn').click();
 
-			// Wait for more data to load
-			await page.waitForTimeout(2000);
-
-			// Should have more results now
-			const newText = await page.getByTestId('data').textContent();
-			const newMatch = newText?.match(/(\d+) messages/);
-			const newCount = newMatch ? parseInt(newMatch[1], 10) : 0;
-
-			expect(newCount).toBeGreaterThanOrEqual(initialCount);
+			// The result set must grow past the initial page. Poll instead of a
+			// fixed wait: the click may be queued until the live subscription is
+			// ready, and concurrent tests mutate the shared messages table.
+			await expect
+				.poll(
+					async () => {
+						const newText = await page.getByTestId('data').textContent();
+						const newMatch = newText?.match(/(\d+) messages/);
+						return newMatch ? parseInt(newMatch[1], 10) : 0;
+					},
+					{ timeout: 10000 }
+				)
+				.toBeGreaterThan(initialCount);
 		}
 	});
 

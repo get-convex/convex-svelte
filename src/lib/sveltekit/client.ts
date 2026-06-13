@@ -6,7 +6,7 @@
  * - `setupConvex(url)` in root layout — handles context + cleanup, calls initConvex internally
  */
 import { ConvexClient, type ConvexClientOptions } from 'convex/browser';
-import { getSingletonClient, setSingleton } from '../internal/singleton.js';
+import { getSingletonClient, getSingletonUrl, setSingleton } from '../internal/singleton.js';
 
 const IS_BROWSER = typeof globalThis.document !== 'undefined';
 
@@ -20,10 +20,20 @@ const IS_BROWSER = typeof globalThis.document !== 'undefined';
  * @returns The singleton `ConvexClient` instance.
  */
 export function initConvex(url: string, options: ConvexClientOptions = {}): ConvexClient {
-	const existing = getSingletonClient();
-	if (existing) return existing;
 	if (!url || typeof url !== 'string') {
 		throw new Error('initConvex requires a non-empty URL string');
+	}
+	const existing = getSingletonClient();
+	if (existing) {
+		// Only one deployment per app is supported — fail loudly instead of
+		// silently handing back a client for a different URL.
+		if (getSingletonUrl() !== url) {
+			throw new Error(
+				`initConvex() was called with ${url}, but the Convex client is already initialized for ${getSingletonUrl()}. ` +
+					'Only one deployment per app is supported. Call closeConvex() first to switch deployments.'
+			);
+		}
+		return existing;
 	}
 	const client = new ConvexClient(url, { disabled: !IS_BROWSER, ...options });
 	setSingleton(url, client);

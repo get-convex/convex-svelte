@@ -4,6 +4,7 @@ import type { Value } from 'convex/values';
 import { useConvexClient } from './client.svelte.js';
 import { SKIP } from './shared/args.js';
 import { parseArgsWithSkip } from './internal/args.svelte.js';
+import { isClientActive } from './internal/client_status.js';
 import type {
 	PageItem,
 	PaginatedReturnType,
@@ -123,8 +124,8 @@ export function usePaginatedQuery<Query extends FunctionReference<'query'>>(
 			argsObject === SKIP ? null : serializeArgsKey(argsObject as Record<string, Value>);
 		machine.onArgsChange(argsKey);
 
-		// Handle disabled client
-		if (client.disabled) {
+		// Handle disabled or closed client
+		if (!isClientActive(client)) {
 			return;
 		}
 
