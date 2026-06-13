@@ -44,6 +44,16 @@
 							</a>
 						</li>
 					{/each}
+					<li>
+						<a
+							href="https://docs.convex.dev/client/svelte"
+							target="_blank"
+							rel="noopener noreferrer"
+							class="rounded-full px-5 py-3 text-convex-ink transition-colors hover:bg-convex-sand"
+						>
+							Docs
+						</a>
+					</li>
 				</ul>
 			</div>
 		</nav>

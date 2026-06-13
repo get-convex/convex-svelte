@@ -39,9 +39,7 @@ test.describe('chat demo', () => {
 		await expect(sendButton).toHaveCSS('cursor', 'pointer');
 	});
 
-	test('shows optimistic messages first, then server-confirmed newest messages first', async ({
-		page
-	}) => {
+	test('shows optimistic messages immediately, with the newest at the bottom', async ({ page }) => {
 		const client = getConvexClient();
 		const author = `e2e-chat-${Date.now()}`;
 		const olderMessage = `older-${Date.now()}`;
@@ -75,7 +73,9 @@ test.describe('chat demo', () => {
 
 			const matchingRows = page.getByTestId('message-row').filter({ hasText: author });
 			await expect(matchingRows).toHaveCount(2, { timeout: 10000 });
-			await expect(matchingRows.first()).toContainText(newestMessage);
+			// Chat is bottom-anchored: the newest message renders last.
+			await expect(matchingRows.last()).toContainText(newestMessage);
+			await expect(matchingRows.first()).toContainText(olderMessage);
 		} finally {
 			await client.mutation(api.messages.deleteByAuthor, { author });
 		}
