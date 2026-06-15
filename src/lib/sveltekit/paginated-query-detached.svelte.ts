@@ -11,6 +11,7 @@ import type { PaginationStatus } from 'convex/browser';
 import type { FunctionReference, FunctionArgs } from 'convex/server';
 import type { Value } from 'convex/values';
 import { getConvexClient, deferSubscription } from '../internal/singleton.js';
+import { isClientActive } from '../internal/client_status.js';
 import type { PageItem, PaginatedReturnType, WithoutPaginationOpts } from '../shared/types.js';
 import {
 	PaginatedQueryStateMachine,
@@ -60,8 +61,10 @@ export function createDetachedPaginatedQuery<Query extends FunctionReference<'qu
 	let error: Error | undefined = $state(snapshot.error);
 	let loadMoreFn: (numItems: number) => boolean = $state(snapshot.loadMore);
 
-	// Sync machine snapshot → $state variables.
-	// Called directly after every machine mutation to ensure Svelte signals fire.
+	// Sync machine snapshot → $state variables so Svelte signals fire on
+	// every machine mutation (updates, errors, queued loadMore requests).
+	// Detached subscriptions live until the client closes, so this listener
+	// is intentionally never removed.
 	function syncState(): void {
 		const s = machine.getSnapshot();
 		results = s.results;
@@ -70,8 +73,9 @@ export function createDetachedPaginatedQuery<Query extends FunctionReference<'qu
 		error = s.error;
 		loadMoreFn = s.loadMore;
 	}
+	machine.subscribe(syncState);
 
-	if (!client.disabled) {
+	if (isClientActive(client)) {
 		// Notify machine of initial args
 		const argsKey = serializeArgsKey(args as Record<string, Value>);
 		machine.onArgsChange(argsKey);
@@ -79,6 +83,8 @@ export function createDetachedPaginatedQuery<Query extends FunctionReference<'qu
 		// Defer subscription until setupAuth (or setupConvex for no-auth apps)
 		// calls flushDeferredSubscriptions(). See query-detached.svelte.ts.
 		deferSubscription(() => {
+			if (!isClientActive(client)) return;
+
 			// Create subscription
 			const unsubscribe = client.onPaginatedUpdate_experimental(
 				query,
@@ -92,11 +98,9 @@ export function createDetachedPaginatedQuery<Query extends FunctionReference<'qu
 						status: current.status,
 						loadMore: (numItems: number) => current.loadMore(numItems)
 					});
-					syncState();
 				},
 				(e: Error) => {
 					machine.onError(e);
-					syncState();
 				}
 			);
 
@@ -108,7 +112,6 @@ export function createDetachedPaginatedQuery<Query extends FunctionReference<'qu
 					status: current.status,
 					loadMore: (numItems: number) => current.loadMore(numItems)
 				});
-				syncState();
 			}
 		});
 	}

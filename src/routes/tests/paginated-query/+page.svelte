@@ -9,7 +9,7 @@
 
 	const messages = usePaginatedQuery(
 		api.messages.paginatedList,
-		() => (skipQuery ? 'skip' : { muteWords: [] }),
+		() => (skipQuery ? 'skip' : { searchWords: [] }),
 		() => ({
 			initialNumItems: 3,
 			initialData: data.initialMessages

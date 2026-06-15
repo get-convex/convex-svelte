@@ -1,1 +1,10 @@
 @import 'tailwindcss';
+
+@theme {
+	--color-convex-red: #ee342f;
+	--color-convex-yellow: #f3b01c;
+	--color-convex-purple: #8d2676;
+	--color-convex-cream: #f6eedb;
+	--color-convex-sand: #ebe3d1;
+	--color-convex-ink: #141414;
+}

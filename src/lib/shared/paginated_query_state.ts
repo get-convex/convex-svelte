@@ -105,6 +105,12 @@ export class PaginatedQueryStateMachine<T> {
 	private state: InternalState<T>;
 	private config: PaginatedQueryConfig<T>;
 	private listeners = new Set<() => void>();
+	/**
+	 * A loadMore request received before the live subscription delivered a
+	 * working loadMore function (e.g. SSR initialData shows `CanLoadMore`
+	 * before the first server update). Flushed by `onUpdate`.
+	 */
+	private pendingLoadMoreNumItems: number | null = null;
 
 	constructor(config: PaginatedQueryConfig<T>) {
 		this.config = config;
@@ -139,9 +145,57 @@ export class PaginatedQueryStateMachine<T> {
 			status: this.state.status,
 			isLoading: this.state.isLoading,
 			error: this.state.error,
-			loadMore: this.state.loadMore,
+			loadMore: (numItems: number) => this.loadMore(numItems),
 			resetKey: this.state.resetKey
 		};
+	}
+
+	/**
+	 * Request more results.
+	 *
+	 * If the live subscription has not delivered a working loadMore yet
+	 * (e.g. rendering from SSR initialData), the request is queued and
+	 * fires as soon as the subscription is ready.
+	 *
+	 * @returns `true` if more results will be loaded, `false` if not
+	 * (already loading, exhausted, or skipped).
+	 */
+	loadMore(numItems: number): boolean {
+		if (this.state.status !== 'CanLoadMore') {
+			return false;
+		}
+		if (this.state.loadMore(numItems)) {
+			return true;
+		}
+		// Status says CanLoadMore but the underlying subscription can't load
+		// yet — it is still fetching its first page behind initialData.
+		// Queue the request; onUpdate flushes it when the subscription is ready.
+		this.pendingLoadMoreNumItems = numItems;
+		this.state = {
+			...this.state,
+			status: 'LoadingMore',
+			isLoading: this.computeIsLoading('LoadingMore')
+		};
+		this.notify();
+		return true;
+	}
+
+	private flushPendingLoadMore(): void {
+		if (this.pendingLoadMoreNumItems === null) return;
+		if (this.state.status === 'Exhausted') {
+			// Nothing more to load — drop the queued request.
+			this.pendingLoadMoreNumItems = null;
+			return;
+		}
+		if (this.state.status !== 'CanLoadMore') return;
+		if (this.state.loadMore(this.pendingLoadMoreNumItems)) {
+			this.pendingLoadMoreNumItems = null;
+			this.state = {
+				...this.state,
+				status: 'LoadingMore',
+				isLoading: this.computeIsLoading('LoadingMore')
+			};
+		}
 	}
 
 	/**
@@ -188,6 +242,8 @@ export class PaginatedQueryStateMachine<T> {
 		}
 
 		this.state.argsKey = newArgsKey;
+		// A queued loadMore belongs to the previous args — drop it.
+		this.pendingLoadMoreNumItems = null;
 
 		// Track when args change from initial
 		if (!this.state.haveArgsEverChanged && this.state.initialArgsKey !== newArgsKey) {
@@ -239,6 +295,23 @@ export class PaginatedQueryStateMachine<T> {
 	 * "empty loading" snapshot to keep SSR-rendered content visible.
 	 */
 	onUpdate(update: PaginatedQueryUpdate<T>): void {
+		if (
+			this.config.keepPreviousData &&
+			this.state.results.length > 0 &&
+			update.results.length === 0 &&
+			update.status === 'LoadingFirstPage'
+		) {
+			this.state = {
+				...this.state,
+				status: update.status,
+				isLoading: true,
+				error: undefined,
+				loadMore: update.loadMore
+			};
+			this.notify();
+			return;
+		}
+
 		// Hydration guard: if using initial data, ignore empty loading snapshots
 		// This keeps SSR-rendered content visible until real data arrives
 		if (
@@ -264,6 +337,7 @@ export class PaginatedQueryStateMachine<T> {
 			error: undefined,
 			loadMore: update.loadMore
 		};
+		this.flushPendingLoadMore();
 		this.notify();
 	}
 
@@ -277,6 +351,7 @@ export class PaginatedQueryStateMachine<T> {
 	onError(error: Error): boolean {
 		if (this.isInvalidCursorError(error)) {
 			console.warn('PaginatedQueryStateMachine: InvalidCursor detected, resetting:', error.message);
+			this.pendingLoadMoreNumItems = null;
 			this.state = {
 				...this.state,
 				results: [],
@@ -304,6 +379,7 @@ export class PaginatedQueryStateMachine<T> {
 	 * Useful for programmatic resets (e.g. pull-to-refresh).
 	 */
 	reset(): void {
+		this.pendingLoadMoreNumItems = null;
 		this.state = {
 			...this.state,
 			results: [],
@@ -329,6 +405,16 @@ export class PaginatedQueryStateMachine<T> {
 	 */
 	getConfig(): Readonly<PaginatedQueryConfig<T>> {
 		return this.config;
+	}
+
+	/**
+	 * Update runtime options that may be provided reactively by framework wrappers.
+	 */
+	updateConfig(config: Partial<PaginatedQueryConfig<T>>): void {
+		this.config = {
+			...this.config,
+			...config
+		};
 	}
 
 	private computeIsLoading(status: PaginationStatus): boolean {

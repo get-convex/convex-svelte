@@ -13,9 +13,11 @@ import { parseArgsWithSkip } from './internal/args.svelte.js';
 import {
 	getConvexClient,
 	getSingletonClient,
+	getSingletonUrl,
 	setSingleton,
 	flushDeferredSubscriptions
 } from './internal/singleton.js';
+import { isClientActive } from './internal/client_status.js';
 
 const _contextKey = '$$_convexClient';
 
@@ -42,8 +44,16 @@ export const setupConvex = (url: string, options: ConvexClientOptions = {}): Con
 	}
 
 	// Reuse the module-level singleton if initConvex() was called earlier
-	// (e.g. from hooks.client.ts). Otherwise create a new client.
+	// (e.g. from hooks.client.ts) or a previous mount created it. Only one
+	// deployment per app is supported — fail loudly instead of silently
+	// handing back a client for a different URL.
 	const existing = getSingletonClient();
+	if (existing && getSingletonUrl() !== url) {
+		throw new Error(
+			`setupConvex() was called with ${url}, but the Convex client is already initialized for ${getSingletonUrl()}. ` +
+				'Only one deployment per app is supported. Call closeConvex() first to switch deployments.'
+		);
+	}
 	const client = existing ?? new ConvexClient(url, { disabled: !BROWSER, ...options });
 	if (!existing) {
 		setSingleton(url, client);
@@ -57,7 +67,10 @@ export const setupConvex = (url: string, options: ConvexClientOptions = {}): Con
 		queueMicrotask(() => flushDeferredSubscriptions());
 	}
 
-	$effect(() => () => client.close());
+	// The client is app-scoped (shared by context hooks, SSR transport, and
+	// detached queries), so it is intentionally NOT closed when this component
+	// unmounts — that broke remounts and HMR. Use closeConvex() for explicit
+	// teardown, e.g. in tests.
 	return client;
 };
 
@@ -126,6 +139,10 @@ export function useQuery<Query extends FunctionReference<'query'>>(
 			// Clear transient result to mimic React: not loading, no data
 			state.result = undefined;
 			state.argsForLastResult = SKIP;
+			return;
+		}
+
+		if (!isClientActive(client)) {
 			return;
 		}
 
@@ -202,7 +219,7 @@ export function useQuery<Query extends FunctionReference<'query'>>(
 
 		let value;
 		try {
-			value = client.disabled
+			value = !isClientActive(client)
 				? undefined
 				: client.client.localQueryResult(
 						getFunctionName(query),

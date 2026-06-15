@@ -7,7 +7,7 @@ export const load = (async () => {
 	const client = new ConvexHttpClient(PUBLIC_CONVEX_URL!);
 	return {
 		messages: await client.query(api.messages.paginatedList, {
-			muteWords: [],
+			searchWords: [],
 			paginationOpts: { numItems: 3, cursor: null }
 		})
 	};

@@ -16,19 +16,18 @@ export const list = query(async (ctx, { muteWords = [] }: { muteWords?: string[]
 
 export const paginatedList = query({
 	args: {
-		muteWords: v.array(v.string()),
+		searchWords: v.array(v.string()),
 		paginationOpts: paginationOptsValidator
 	},
-	handler: async (ctx, { muteWords = [], paginationOpts }) => {
-		const results = await ctx.db.query('messages').paginate(paginationOpts);
-		const page = results.page.filter(
-			({ body }) => !muteWords.some((word) => body.toLowerCase().includes(word.toLowerCase()))
-		);
+	handler: async (ctx, { searchWords = [], paginationOpts }) => {
+		if (searchWords.length === 0) {
+			return await ctx.db.query('messages').order('desc').paginate(paginationOpts);
+		}
 
-		return {
-			...results,
-			page
-		};
+		return await ctx.db
+			.query('messages')
+			.withSearchIndex('search_body', (q) => q.search('body', searchWords.join(' ')))
+			.paginate(paginationOpts);
 	}
 });
 

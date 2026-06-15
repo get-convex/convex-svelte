@@ -6,6 +6,7 @@
  */
 import type { FunctionReference, FunctionReturnType, FunctionArgs } from 'convex/server';
 import { getConvexClient, deferSubscription } from '../internal/singleton.js';
+import { isClientActive } from '../internal/client_status.js';
 
 export type DetachedQueryResult<Query extends FunctionReference<'query'>> = {
 	readonly data: FunctionReturnType<Query> | undefined;
@@ -32,12 +33,14 @@ export function createDetachedQuery<Query extends FunctionReference<'query'>>(
 	let data: FunctionReturnType<Query> | undefined = $state(initialData);
 	let error: Error | undefined = $state(undefined);
 
-	if (!client.disabled) {
+	if (isClientActive(client)) {
 		// Defer subscription until setupAuth (or setupConvex for no-auth apps)
 		// calls flushDeferredSubscriptions(). This prevents auth gap: transport.decode
 		// runs before setupAuth can call client.setAuth(), so without deferral,
 		// subscriptions would fire on an unauthenticated WebSocket.
 		deferSubscription(() => {
+			if (!isClientActive(client)) return;
+
 			client.onUpdate(
 				query,
 				args,

@@ -22,4 +22,4 @@ export {
 	type UsePaginatedQueryOptions,
 	type UsePaginatedQueryReturn
 } from './use_paginated_query.svelte.js';
-export { getConvexClient } from './internal/singleton.js';
+export { getConvexClient, closeConvex } from './internal/singleton.js';
