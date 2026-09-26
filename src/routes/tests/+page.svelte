@@ -106,6 +106,11 @@
 					description: 'Tests that hydration reuses SSR data instead of querying before auth'
 				},
 				{
+					title: 'ConvexLoad Nested Loads',
+					path: '/tests/convex-load-nested',
+					description: 'Tests hydration with universal + server layouts and parent()'
+				},
+				{
 					title: 'ConvexLoad Server Load',
 					path: '/tests/convex-load-server',
 					description: 'Tests convexLoad in +page.server.ts (transport, no SSR payload)'

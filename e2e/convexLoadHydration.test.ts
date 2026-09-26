@@ -72,6 +72,31 @@ test.describe('convexLoad — SSR hydration payload', () => {
 		]);
 	});
 
+	test('layouts, server layouts and parent(): embeds exactly the universal results', async ({
+		page
+	}) => {
+		const websocket = recordWebSocket(page);
+		const response = await page.goto('/tests/convex-load-nested');
+		const html = (await response?.text()) ?? '';
+
+		expect(html).toContain('__e2e_nested_layout__');
+		expect(html).toContain('__e2e_nested_page__');
+		expect(html).not.toContain('__e2e_nested_server_private__');
+
+		await expect(page.getByTestId('hydrated')).toContainText('true', { timeout: 5000 });
+		await expect(page.getByTestId('layout-data')).toBeVisible();
+		await expect(page.getByTestId('data')).toBeVisible();
+		await expect
+			.poll(() => websocket.queryEvents(withMuteWord('__e2e_nested_page__')).length)
+			.toBe(1);
+		await page.waitForTimeout(1000);
+
+		// Each universal query: one subscription, no Add/Remove churn.
+		for (const marker of ['__e2e_nested_layout__', '__e2e_nested_page__']) {
+			expect(websocket.queryEvents(withMuteWord(marker)).map((e) => e.type)).toEqual(['Add']);
+		}
+	});
+
 	test('embedded data cannot inject scripts', async ({ page, request }) => {
 		const author = '__e2e_hydration_xss__';
 		const mutation = (path: string, args: Record<string, string>) =>

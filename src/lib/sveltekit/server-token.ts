@@ -22,8 +22,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { _setServerTokenGetter } from '../internal/singleton.js';
 
-export { convexLoadHydration } from './hydration-server.js';
-
 const tokenStorage = new AsyncLocalStorage<string | undefined>();
 
 // Register the getter so convexLoad / createConvexHttpClient can access
