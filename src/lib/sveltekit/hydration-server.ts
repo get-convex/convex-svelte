@@ -5,6 +5,10 @@
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Handle } from '@sveltejs/kit';
+// Internal SvelteKit entry (used by its generated server code); it ships no
+// module types. Imported statically so we share SvelteKit's module instance.
+// @ts-expect-error -- no type declarations for this internal entry
+import * as kitInternal from '@sveltejs/kit/internal/server';
 import {
 	_setHydrationCollectorGetter,
 	injectHydrationPayload,
@@ -13,9 +17,31 @@ import {
 
 const collectorStorage = new AsyncLocalStorage<HydrationCollector>();
 
-// Register the getter so convexLoad can record results without importing
-// node:async_hooks itself.
-_setHydrationCollectorGetter(() => collectorStorage.getStore());
+// SvelteKit marks the request store while a universal load runs on the server
+// (`state.is_in_universal_load`) — its remote functions use the same flag to
+// decide which results to serialize for hydration. There is no public API for
+// it, so read it defensively: if it can't be read, nothing is embedded and
+// convexLoad behaves as without this handle.
+type RequestStore = { state?: { is_in_universal_load?: boolean } } | null;
+const tryGetRequestStore = (
+	kitInternal as unknown as { try_get_request_store?: () => RequestStore }
+).try_get_request_store;
+
+function isInUniversalLoad(): boolean {
+	try {
+		return tryGetRequestStore?.()?.state?.is_in_universal_load === true;
+	} catch {
+		return false;
+	}
+}
+
+// Only record results of universal loads: those re-run in the browser, which
+// would fetch the same data itself. Server loads (+page.server.ts) may fetch
+// data they never return (or return only in part) — it must never end up in
+// the HTML. Their returned results reach the browser through the transport.
+_setHydrationCollectorGetter(() => (isInUniversalLoad() ? collectorStorage.getStore() : undefined));
+
+let warnedUnsupported = false;
 
 /**
  * SvelteKit `handle` that embeds `convexLoad()` / `convexLoadPaginated()`
@@ -26,8 +52,8 @@ _setHydrationCollectorGetter(() => collectorStorage.getStore());
  * `setupAuth()` has authenticated the client. With this handle, those loads
  * reuse the server's (authenticated) results instead of querying again — no
  * unauthenticated query, and no waiting for the WebSocket before the page is
- * interactive. Results of server loads (`+page.server.ts`) already reach the
- * browser through the transport hook and are not embedded again.
+ * interactive. Results of server loads (`+page.server.ts`) are never embedded;
+ * the ones they return reach the browser through the transport hook.
  *
  * @example
  * ```ts
@@ -42,6 +68,13 @@ _setHydrationCollectorGetter(() => collectorStorage.getStore());
  * ```
  */
 export const convexLoadHydration: Handle = ({ event, resolve }) => {
+	if (!tryGetRequestStore && !warnedUnsupported) {
+		warnedUnsupported = true;
+		console.warn(
+			'[convex-svelte] convexLoadHydration: this SvelteKit version does not expose the ' +
+				'universal-load marker, so no convexLoad results are embedded.'
+		);
+	}
 	const collector: HydrationCollector = new Map();
 	return collectorStorage.run(collector, () =>
 		resolve(event, {

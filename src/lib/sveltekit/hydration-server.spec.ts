@@ -6,11 +6,17 @@ import type { RequestEvent, ResolveOptions } from '@sveltejs/kit';
 // of convexLoad / convexLoadPaginated (SERVER environment, no document).
 // ---------------------------------------------------------------------------
 
-const { mockHttpClientQuery } = vi.hoisted(() => {
+const { mockHttpClientQuery, kit } = vi.hoisted(() => {
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	delete (globalThis as any)['document'];
-	return { mockHttpClientQuery: vi.fn() };
+	return { mockHttpClientQuery: vi.fn(), kit: { inUniversalLoad: true } };
 });
+
+// SvelteKit sets `state.is_in_universal_load` in the request store while a
+// universal load runs on the server; simulated here.
+vi.mock('@sveltejs/kit/internal/server', () => ({
+	try_get_request_store: () => ({ state: { is_in_universal_load: kit.inUniversalLoad } })
+}));
 
 vi.mock('convex/browser', () => ({
 	ConvexHttpClient: class {
@@ -30,12 +36,7 @@ vi.mock('./route-data.svelte.js', () => ({ createRouteQuery: vi.fn() }));
 
 import { makeFunctionReference } from 'convex/server';
 import { convexLoadHydration } from './hydration-server.js';
-import {
-	convexLoad,
-	convexLoadPaginated,
-	encodeConvexLoad,
-	encodeConvexLoadPaginated
-} from './transport.svelte.js';
+import { convexLoad, convexLoadPaginated } from './transport.svelte.js';
 
 const listRef = makeFunctionReference<'query'>('messages:list');
 const pageRef = makeFunctionReference<'query'>('messages:paginatedList');
@@ -58,6 +59,20 @@ async function renderPage(render: () => Promise<void>): Promise<string> {
 	return html;
 }
 
+/** Run load code as a universal load (+page.ts) or as a server load (+page.server.ts). */
+async function universalLoad(fn: () => Promise<unknown>) {
+	kit.inUniversalLoad = true;
+	await fn();
+}
+async function serverLoad(fn: () => Promise<unknown>) {
+	kit.inUniversalLoad = false;
+	try {
+		await fn();
+	} finally {
+		kit.inUniversalLoad = true;
+	}
+}
+
 /** The embedded payload of a rendered page, or `undefined`. */
 function payloadOf(html: string): Record<string, unknown> | undefined {
 	const json = html.match(/<script [^>]*data-convex-load>(.*?)<\/script>/)?.[1];
@@ -73,7 +88,6 @@ describe('convexLoadHydration', () => {
 		});
 
 		expect(payloadOf(html)).toEqual({ 'messages:list|{"muteWords":[]}': [{ body: 'hi' }] });
-		expect(html.indexOf('data-convex-load')).toBeLessThan(html.indexOf('</body>'));
 	});
 
 	it('embeds the first page of convexLoadPaginated, keyed with the page size', async () => {
@@ -97,23 +111,35 @@ describe('convexLoadHydration', () => {
 			await convexLoadPaginated(pageRef, {}, { initialNumItems: 5, hydrate: false });
 		});
 
-		expect(payloadOf(html)).toBeUndefined();
-		expect(html).toBe(TEMPLATE);
+		expect(payloadOf(html)).toEqual({});
 	});
 
-	it('does not embed server-load results again (they go through the transport)', async () => {
-		mockHttpClientQuery.mockResolvedValue([]);
+	it('never embeds server-load results, not even ones the load does not return', async () => {
+		// A +page.server.ts load may fetch private data and return only part of
+		// it (or a token-privileged result): that must never reach the HTML.
+		mockHttpClientQuery.mockResolvedValue({ displayName: 'Ada', email: 'private@example.com' });
+
+		const html = await renderPage(() =>
+			serverLoad(async () => {
+				const account = await convexLoad(listRef, { account: true });
+				void account.data?.displayName;
+				await convexLoadPaginated(pageRef, {}, { initialNumItems: 5 });
+			})
+		);
+
+		expect(payloadOf(html)).toEqual({});
+		expect(html).not.toContain('private@example.com');
+	});
+
+	it('embeds a universal result even when a server load fetched the same query', async () => {
+		mockHttpClientQuery.mockResolvedValue(['same']);
 
 		const html = await renderPage(async () => {
-			// +page.server.ts: SvelteKit serializes the result with the transport
-			// hook before transforming the page HTML.
-			encodeConvexLoad(await convexLoad(listRef, { server: true }));
-			encodeConvexLoadPaginated(await convexLoadPaginated(pageRef, {}, { initialNumItems: 5 }));
-			// +page.ts: not serialized, re-runs in the browser.
-			await convexLoad(listRef, { universal: true });
+			await universalLoad(() => convexLoad(listRef, {}));
+			await serverLoad(() => convexLoad(listRef, {}));
 		});
 
-		expect(Object.keys(payloadOf(html) ?? {})).toEqual(['messages:list|{"universal":true}']);
+		expect(payloadOf(html)).toEqual({ 'messages:list|{}': ['same'] });
 	});
 
 	it('keeps concurrent requests apart', async () => {
@@ -135,10 +161,49 @@ describe('convexLoadHydration', () => {
 		expect(payloadOf(b)).toEqual({ 'messages:list|{"request":"b"}': 'b' });
 	});
 
+	it("places the payload in <head>, before SvelteKit's start script in <body>", async () => {
+		mockHttpClientQuery.mockResolvedValueOnce([]);
+
+		const html = await renderPage(async () => {
+			await convexLoad(listRef, {});
+		});
+
+		expect(html.indexOf('data-convex-load')).toBeLessThan(html.indexOf('</head>'));
+	});
+
 	it('does nothing outside the handle', async () => {
 		mockHttpClientQuery.mockResolvedValueOnce([]);
 
 		// Without the handle, convexLoad still works; there is just no payload.
 		await expect(convexLoad(listRef, {})).resolves.toBeDefined();
+	});
+});
+
+describe('convexLoadHydration — SvelteKit without the universal-load marker', () => {
+	it('embeds nothing (fail-safe) and warns once', async () => {
+		vi.resetModules();
+		// A real module namespace yields `undefined` for a removed export.
+		vi.doMock('@sveltejs/kit/internal/server', () => ({ try_get_request_store: undefined }));
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const { convexLoadHydration: handle } = await import('./hydration-server.js');
+		const transport = await import('./transport.svelte.js');
+		mockHttpClientQuery.mockResolvedValue(['x']);
+
+		let html = '';
+		for (let i = 0; i < 2; i++) {
+			await handle({
+				event: {} as RequestEvent,
+				resolve: async (_event: RequestEvent, options?: ResolveOptions) => {
+					await transport.convexLoad(listRef, {});
+					html = (await options?.transformPageChunk?.({ html: TEMPLATE, done: true })) ?? '';
+					return new Response(html);
+				}
+			});
+		}
+
+		expect(payloadOf(html)).toEqual({});
+		expect(warn).toHaveBeenCalledOnce();
+		warn.mockRestore();
+		vi.doUnmock('@sveltejs/kit/internal/server');
 	});
 });

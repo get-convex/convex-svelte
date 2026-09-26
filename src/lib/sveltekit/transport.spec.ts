@@ -79,7 +79,7 @@ vi.mock('convex/browser', () => ({
 vi.mock('./hydration.js', () => ({
 	takeHydratedValue: mockTakeHydratedValue,
 	recordForHydration: vi.fn(),
-	markTransported: vi.fn()
+	warnHydrationMiss: vi.fn()
 }));
 
 vi.mock('./query-detached.svelte.js', () => ({
@@ -133,6 +133,7 @@ import {
 	decodeConvexLoadPaginated
 } from './transport.svelte.js';
 import { createDetachedQuery, openDetachedQuery } from './query-detached.svelte.js';
+import { warnHydrationMiss } from './hydration.js';
 import {
 	createDetachedPaginatedQuery,
 	openDetachedPaginatedQuery
@@ -235,6 +236,29 @@ describe('convexLoad — initial hydration reuses the SSR payload', () => {
 		expect(mockSingletonQuery).not.toHaveBeenCalled();
 	});
 
+	it('warns (dev) when there is no server result, then subscribes immediately', async () => {
+		mockTakeHydratedValue.mockReturnValue(undefined);
+
+		const load = convexLoad(mockRef, {});
+		firstValue.resolve();
+		await load;
+
+		expect(warnHydrationMiss).toHaveBeenCalledWith('messages:list');
+		expect(openDetachedQuery).toHaveBeenCalledOnce();
+	});
+
+	it('hydrate: false skips the payload lookup and the warning', async () => {
+		mockTakeHydratedValue.mockReturnValue({ value: ['ssr'] });
+
+		const load = convexLoad(mockRef, {}, { hydrate: false });
+		firstValue.resolve();
+		await load;
+
+		expect(mockTakeHydratedValue).not.toHaveBeenCalled();
+		expect(warnHydrationMiss).not.toHaveBeenCalled();
+		expect(openDetachedQuery).toHaveBeenCalledOnce();
+	});
+
 	it('reuses falsy server results such as null', async () => {
 		mockTakeHydratedValue.mockReturnValue({ value: null });
 
@@ -320,6 +344,21 @@ describe('convexLoadPaginated — initial hydration reuses the SSR payload', () 
 			{ initialNumItems: 10, initialData: page, scope: 'route', keepAlive: true }
 		);
 		expect(openDetachedPaginatedQuery).not.toHaveBeenCalled();
+	});
+
+	it('warns (dev) on a miss, and hydrate: false skips lookup and warning', async () => {
+		mockTakeHydratedValue.mockReturnValue(undefined);
+		const miss = convexLoadPaginated(mockRef, {}, { initialNumItems: 5 });
+		firstValue.resolve();
+		await miss;
+		expect(warnHydrationMiss).toHaveBeenCalledOnce();
+
+		vi.clearAllMocks();
+		const optOut = convexLoadPaginated(mockRef, {}, { initialNumItems: 5, hydrate: false });
+		firstValue.resolve();
+		await optOut;
+		expect(mockTakeHydratedValue).not.toHaveBeenCalled();
+		expect(warnHydrationMiss).not.toHaveBeenCalled();
 	});
 });
 
