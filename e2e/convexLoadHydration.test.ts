@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { convexUrl, recordWebSocket, withMuteWord } from './helpers/websocket.js';
+import { convexUrl, recordWebSocket, withMuteWord, type QueryEvent } from './helpers/websocket.js';
 
 // ---------------------------------------------------------------------------
 // convexLoad SSR hydration payload (convexLoadHydration handle in
@@ -96,6 +96,39 @@ test.describe('convexLoad — SSR hydration payload', () => {
 			expect(websocket.queryEvents(withMuteWord(marker)).map((e) => e.type)).toEqual(['Add']);
 		}
 	});
+
+	for (const [name, url, predicate] of [
+		['convexLoad', '/tests/convex-load-release/a', withMuteWord('__e2e_release_a__')],
+		[
+			'convexLoadPaginated',
+			'/tests/convex-load-paginated',
+			(e: QueryEvent) => e.udfPath === 'messages:paginatedList'
+		]
+	] as const) {
+		test(`${name}: no loading state from SSR through hydration and the live subscription`, async ({
+			page
+		}) => {
+			// Watch from the very first byte whether a loading state ever renders.
+			await page.addInitScript(() => {
+				const w = window as Window & { __sawLoading?: boolean };
+				new MutationObserver(() => {
+					if (document.querySelector('[data-testid="loading"]')) w.__sawLoading = true;
+				}).observe(document, { childList: true, subtree: true });
+			});
+			const websocket = recordWebSocket(page);
+
+			await page.goto(url);
+			await expect(page.getByTestId('hydrated')).toContainText('true', { timeout: 5000 });
+			// The live subscription is up and has delivered its first update.
+			await expect.poll(() => websocket.queryEvents(predicate).length).toBe(1);
+			await page.waitForTimeout(1000);
+
+			await expect(page.getByTestId('data')).toBeVisible();
+			expect(
+				await page.evaluate(() => (window as Window & { __sawLoading?: boolean }).__sawLoading)
+			).toBeUndefined();
+		});
+	}
 
 	test('embedded data cannot inject scripts', async ({ page, request }) => {
 		const author = '__e2e_hydration_xss__';

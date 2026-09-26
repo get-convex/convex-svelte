@@ -60,6 +60,62 @@ describe('PaginatedQueryStateMachine keepPreviousData', () => {
 		});
 	});
 
+	it.each([true, false])(
+		'does not mark SSR initialData as loading when the initial args are set (keepPreviousData: %s)',
+		(keepPreviousData) => {
+			const machine = new PaginatedQueryStateMachine<string>({
+				initialNumItems: 3,
+				keepPreviousData,
+				initialData: { page: ['a', 'b', 'c'], isDone: false, continueCursor: 'cursor-1' }
+			});
+
+			machine.onArgsChange(JSON.stringify({}));
+
+			expect(machine.getSnapshot()).toMatchObject({
+				results: ['a', 'b', 'c'],
+				status: 'CanLoadMore',
+				isLoading: false
+			});
+		}
+	);
+
+	it('keeps SSR initialData visible (not loading) on the first empty snapshot', () => {
+		// Detached (convexLoadPaginated) queries use keepPreviousData: the SSR
+		// page must not be treated as "previous" data and flash a loading state.
+		const machine = new PaginatedQueryStateMachine<string>({
+			initialNumItems: 3,
+			keepPreviousData: true,
+			initialData: { page: ['a', 'b', 'c'], isDone: false, continueCursor: 'cursor-1' }
+		});
+		machine.onArgsChange(JSON.stringify({}));
+
+		machine.onUpdate({ results: [], status: 'LoadingFirstPage', loadMore: () => false });
+
+		expect(machine.getSnapshot()).toMatchObject({
+			results: ['a', 'b', 'c'],
+			status: 'CanLoadMore',
+			isLoading: false
+		});
+	});
+
+	it('still keeps previous data as loading once args changed (initialData no longer applies)', () => {
+		const machine = new PaginatedQueryStateMachine<string>({
+			initialNumItems: 3,
+			keepPreviousData: true,
+			initialData: { page: ['a', 'b', 'c'], isDone: false, continueCursor: 'cursor-1' }
+		});
+		machine.onArgsChange(JSON.stringify({ search: '' }));
+		machine.onArgsChange(JSON.stringify({ search: 'x' }));
+
+		machine.onUpdate({ results: [], status: 'LoadingFirstPage', loadMore: () => false });
+
+		expect(machine.getSnapshot()).toMatchObject({
+			results: ['a', 'b', 'c'],
+			status: 'LoadingFirstPage',
+			isLoading: true
+		});
+	});
+
 	it('queues loadMore called before the live subscription is ready', () => {
 		// SSR initialData reports CanLoadMore immediately, but the underlying
 		// subscription has no working loadMore until its first server update.

@@ -155,6 +155,30 @@ describe('findTag — server', () => {
 		expect(hydration.findTag(html, '</head')).toBe(html.lastIndexOf('</head>'));
 	});
 
+	it.each([
+		['an attribute value', `<head><meta content='Example </head>'></head><body>`],
+		['a quoted ">" in an attribute', '<head><meta content="a > b </head>"></head><body>'],
+		[
+			'a script, after a non-closing "</script-…"',
+			'<head><script>const t = "</script-not-a-tag></head>";</script></head><body>'
+		]
+	])('ignores </head> inside %s', async (_name, html) => {
+		const { hydration } = await loadModules();
+
+		expect(hydration.findTag(html, '</head')).toBe(html.lastIndexOf('</head>'));
+	});
+
+	it('keeps indices exact when lowercasing would change the length ("İ")', async () => {
+		const { hydration } = await loadModules();
+		const html = '<head><title>İstanbul</title></head><body>';
+		const collector = collectorWith(hydration, { 'a|{}': 1 });
+
+		expect(hydration.findTag(html, '</head')).toBe(html.indexOf('</head>'));
+		expect(hydration.injectHydrationPayload(html, collector)).toMatch(
+			/<\/title><script [^>]*data-convex-load>.*<\/script><\/head><body>$/
+		);
+	});
+
 	it('is case-insensitive and requires a tag boundary', async () => {
 		const { hydration } = await loadModules();
 
