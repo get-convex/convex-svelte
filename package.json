@@ -61,6 +61,11 @@
 			"types": "./dist/sveltekit/server-token.d.ts",
 			"import": "./dist/sveltekit/server-token.js",
 			"default": "./dist/sveltekit/server-token.js"
+		},
+		"./sveltekit/server/hydration": {
+			"types": "./dist/sveltekit/hydration-server.d.ts",
+			"import": "./dist/sveltekit/hydration-server.js",
+			"default": "./dist/sveltekit/hydration-server.js"
 		}
 	},
 	"peerDependencies": {

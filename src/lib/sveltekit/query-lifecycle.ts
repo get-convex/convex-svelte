@@ -133,6 +133,21 @@ export class RouteQuery {
 		return this.#phase;
 	}
 
+	/**
+	 * Keep an unclaimed query from timing out until `pending` settles, e.g.
+	 * while its load awaits the first result (which may take long when offline).
+	 */
+	holdWhile(pending: Promise<unknown>): void {
+		if (this.#phase !== 'unclaimed') return;
+		this.#clearTimer();
+		const restart = () => {
+			if (this.#phase === 'unclaimed') {
+				this.#startTimer(UNCLAIMED_TIMEOUT_MS, () => this.#release());
+			}
+		};
+		pending.then(restart, restart);
+	}
+
 	/** An effect started reading this query. */
 	retainReader(): void {
 		this.#readers += 1;

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { recordWebSocket, withMuteWord, type QueryEvent } from './helpers/websocket.js';
 
 // ---------------------------------------------------------------------------
 // convexLoad subscriptions are route-scoped (issue #57): leaving a route
@@ -107,8 +108,6 @@ test.describe('convexLoad — route-scoped subscriptions', () => {
 		const subscriptions = trackSubscriptions(page);
 		await openPage(page, '/tests/convex-load-release/a');
 		await expect.poll(() => subscriptions.isSubscribed('a')).toBe(true);
-		// Let hydration settle: universal loads re-run in the browser, and
-		// convexLoad's initial client.query() briefly subscribes on its own.
 		await page.waitForTimeout(1000);
 		const mark = subscriptions.mark();
 
@@ -120,5 +119,59 @@ test.describe('convexLoad — route-scoped subscriptions', () => {
 		// The original subscription was never removed nor re-added.
 		expect(subscriptions.eventsSince(mark, 'a')).toEqual([]);
 		expect(subscriptions.isSubscribed('a')).toBe(true);
+	});
+});
+
+test.describe('convexLoad — one subscription per query', () => {
+	test('client-side navigation opens exactly one subscription', async ({ page }) => {
+		const websocket = recordWebSocket(page);
+		await openPage(page, '/tests/convex-load-release/a');
+		const mark = websocket.mark();
+
+		await navigateTo(page, 'b');
+		await page.waitForTimeout(1000);
+
+		// Previously: Add (one-shot query) → Remove → Add (live subscription).
+		expect(
+			websocket.queryEvents(withMuteWord('__e2e_release_b__'), mark).map((e) => e.type)
+		).toEqual(['Add']);
+	});
+});
+
+test.describe('convexLoadPaginated — one subscription per query', () => {
+	const isPaginatedList = (event: QueryEvent) => event.udfPath === 'messages:paginatedList';
+
+	test('hydration opens exactly one subscription', async ({ page }) => {
+		const websocket = recordWebSocket(page);
+		await page.goto('/tests/convex-load-paginated');
+		await expect(page.getByTestId('hydrated')).toContainText('true', { timeout: 5000 });
+		await expect.poll(() => websocket.queryEvents(isPaginatedList).length).toBeGreaterThan(0);
+		await page.waitForTimeout(1000);
+
+		expect(websocket.queryEvents(isPaginatedList).map((e) => e.type)).toEqual(['Add']);
+	});
+
+	test('client-side navigation opens exactly one subscription', async ({ page }) => {
+		const websocket = recordWebSocket(page);
+		await page.goto('/tests');
+		await expect(page.getByRole('link', { name: /ConvexLoadPaginated/ })).toBeVisible();
+		const mark = websocket.mark();
+
+		// The load awaits the first page, so the new page never renders a loading state.
+		await page.evaluate(() => {
+			const w = window as Window & { __sawLoading?: boolean };
+			new MutationObserver(() => {
+				if (document.querySelector('[data-testid="loading"]')) w.__sawLoading = true;
+			}).observe(document.body, { childList: true, subtree: true });
+		});
+
+		await page.getByRole('link', { name: /ConvexLoadPaginated/ }).click();
+		await expect(page.getByTestId('data')).toBeVisible({ timeout: 10000 });
+		await page.waitForTimeout(1000);
+
+		expect(websocket.queryEvents(isPaginatedList, mark).map((e) => e.type)).toEqual(['Add']);
+		expect(
+			await page.evaluate(() => (window as Window & { __sawLoading?: boolean }).__sawLoading)
+		).toBeUndefined();
 	});
 });

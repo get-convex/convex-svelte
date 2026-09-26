@@ -87,3 +87,16 @@ describe('withServerConvexToken', () => {
 		expect(result).toBe('async-token');
 	});
 });
+
+describe('convex-svelte/sveltekit/server entry', () => {
+	it('does not depend on SvelteKit internals (older SvelteKit versions keep working)', async () => {
+		vi.resetModules();
+		vi.doMock('@sveltejs/kit/internal/server', () => {
+			throw new Error('Missing "./internal/server" specifier in "@sveltejs/kit" package');
+		});
+
+		await expect(import('./server-token.js')).resolves.toHaveProperty('withServerConvexToken');
+
+		vi.doUnmock('@sveltejs/kit/internal/server');
+	});
+});

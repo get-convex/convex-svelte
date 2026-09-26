@@ -101,6 +101,21 @@
 					description: 'Tests that convexLoad subscriptions are released after leaving a route'
 				},
 				{
+					title: 'ConvexLoad Auth Hydration',
+					path: '/tests/convex-load-auth',
+					description: 'Tests that hydration reuses SSR data instead of querying before auth'
+				},
+				{
+					title: 'ConvexLoad Nested Loads',
+					path: '/tests/convex-load-nested',
+					description: 'Tests hydration with universal + server layouts and parent()'
+				},
+				{
+					title: 'ConvexLoad Server Load',
+					path: '/tests/convex-load-server',
+					description: 'Tests convexLoad in +page.server.ts (transport, no SSR payload)'
+				},
+				{
 					title: 'ConvexLoadPaginated (SSR Transport)',
 					path: '/tests/convex-load-paginated',
 					description: 'Tests SSR transport with live paginated upgrade via convexLoadPaginated'

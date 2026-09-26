@@ -46,8 +46,11 @@ vi.mock('./route-data.svelte.js', async () => {
 	};
 });
 
-import { createDetachedQuery } from './query-detached.svelte.js';
-import { createDetachedPaginatedQuery } from './paginated-query-detached.svelte.js';
+import { createDetachedQuery, openDetachedQuery } from './query-detached.svelte.js';
+import {
+	createDetachedPaginatedQuery,
+	openDetachedPaginatedQuery
+} from './paginated-query-detached.svelte.js';
 import {
 	_resetQueryLifecycle,
 	configureKeepAlive,
@@ -313,5 +316,312 @@ describe('route scope — idle duplicates', () => {
 		flush();
 
 		expect(client.unsubscribe).not.toHaveBeenCalled();
+	});
+});
+
+/** Whether a promise settles once all pending microtasks have run. */
+async function settledState(
+	promise: Promise<unknown>
+): Promise<'pending' | 'resolved' | 'rejected'> {
+	let state: 'pending' | 'resolved' | 'rejected' = 'pending';
+	promise.then(
+		() => (state = 'resolved'),
+		() => (state = 'rejected')
+	);
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	return state;
+}
+
+describe('openDetachedQuery — immediate subscription with first value (convexLoad)', () => {
+	/** The value/error callbacks of the n-th onUpdate call. */
+	function callbacks(call = 0) {
+		const [, , onResult, onError] = client.onUpdate.mock.calls[call] as [
+			unknown,
+			unknown,
+			(value: unknown) => void,
+			(error: Error) => void
+		];
+		return { onResult, onError };
+	}
+
+	it('subscribes synchronously, bypassing the deferred queue', () => {
+		openDetachedQuery(ref, {}, undefined, { scope: 'route', immediate: true });
+
+		expect(client.onUpdate).toHaveBeenCalledOnce();
+		expect(deferred).toHaveLength(0);
+	});
+
+	it('resolves with the first result and exposes it as data', async () => {
+		const { result, firstValue } = openDetachedQuery(ref, {}, undefined, {
+			scope: 'route',
+			immediate: true
+		});
+		expect(await settledState(firstValue)).toBe('pending');
+		expect(result.isLoading).toBe(true);
+
+		callbacks().onResult(['first']);
+
+		expect(await settledState(firstValue)).toBe('resolved');
+		expect(result.data).toEqual(['first']);
+		expect(result.isLoading).toBe(false);
+	});
+
+	it('uses an already available value right away (revisiting a live query)', async () => {
+		client.onUpdate.mockReturnValueOnce(
+			Object.assign(vi.fn(), { getCurrentValue: () => ['cached'] })
+		);
+
+		const { result, firstValue } = openDetachedQuery(ref, {}, undefined, {
+			scope: 'route',
+			immediate: true
+		});
+
+		expect(result.data).toEqual(['cached']);
+		expect(await settledState(firstValue)).toBe('resolved');
+	});
+
+	it('rejects with the query error', async () => {
+		const { result, firstValue } = openDetachedQuery(ref, {}, undefined, {
+			scope: 'route',
+			immediate: true
+		});
+
+		callbacks().onError(new Error('boom'));
+
+		await expect(firstValue).rejects.toThrow('boom');
+		expect(result.error?.message).toBe('boom');
+	});
+
+	it('rejects with a cached error thrown by getCurrentValue', async () => {
+		client.onUpdate.mockReturnValueOnce(
+			Object.assign(vi.fn(), {
+				getCurrentValue: () => {
+					throw new Error('cached error');
+				}
+			})
+		);
+
+		const { firstValue } = openDetachedQuery(ref, {}, undefined, {
+			scope: 'route',
+			immediate: true
+		});
+
+		await expect(firstValue).rejects.toThrow('cached error');
+	});
+
+	it('rejects when disposed before the first result', async () => {
+		const { result, firstValue } = openDetachedQuery(ref, {}, undefined, {
+			scope: 'route',
+			immediate: true
+		});
+
+		result.dispose();
+
+		await expect(firstValue).rejects.toThrow('disposed before its first result');
+	});
+
+	it('rejects right away for an inactive client instead of hanging', async () => {
+		client.disabled = true;
+
+		const { firstValue } = openDetachedQuery(ref, {}, undefined, {
+			scope: 'route',
+			immediate: true
+		});
+
+		await expect(firstValue).rejects.toThrow('disabled or closed');
+		expect(client.onUpdate).not.toHaveBeenCalled();
+	});
+
+	it('keeps later results flowing after the first one', () => {
+		const { result } = openDetachedQuery(ref, {}, undefined, { scope: 'route', immediate: true });
+
+		callbacks().onResult(['first']);
+		callbacks().onResult(['second']);
+
+		expect(result.data).toEqual(['second']);
+	});
+
+	it('resubscribes through the deferred queue after a release (only the first open is immediate)', () => {
+		configureKeepAlive(false);
+		const { result } = openDetachedQuery(ref, {}, undefined, { scope: 'route', immediate: true });
+		callbacks().onResult(['first']);
+		reconcileRouteQueries({ messages: result });
+		reconcileRouteQueries({});
+
+		reconcileRouteQueries({ messages: result });
+
+		expect(client.onUpdate).toHaveBeenCalledOnce();
+		flush();
+		expect(client.onUpdate).toHaveBeenCalledTimes(2);
+	});
+
+	it('createDetachedQuery keeps the deferred subscription (transport / hydration path)', () => {
+		createDetachedQuery(ref, {}, ['ssr'], { scope: 'route' });
+
+		expect(client.onUpdate).not.toHaveBeenCalled();
+		flush();
+		expect(client.onUpdate).toHaveBeenCalledOnce();
+	});
+});
+
+describe('openDetachedPaginatedQuery — immediate subscription with first page', () => {
+	function paginatedCallbacks(call = 0) {
+		const [, , , onUpdate, onError] = client.onPaginatedUpdate_experimental.mock.calls[call] as [
+			unknown,
+			unknown,
+			unknown,
+			() => void,
+			(error: Error) => void
+		];
+		return { onUpdate, onError };
+	}
+
+	/**
+	 * A subscription whose current value can be set by the test. Like Convex,
+	 * it reports `LoadingFirstPage` right away, before any page arrived.
+	 */
+	function paginatedSubscription() {
+		let current: { results: unknown[]; status: string; loadMore: () => boolean } = {
+			results: [],
+			status: 'LoadingFirstPage',
+			loadMore: () => false
+		};
+		const subscription = Object.assign(vi.fn(), { getCurrentValue: () => current });
+		client.onPaginatedUpdate_experimental.mockReturnValueOnce(subscription);
+		return {
+			deliver(results: unknown[], status = 'CanLoadMore') {
+				current = { results, status, loadMore: () => true };
+			}
+		};
+	}
+
+	it('does not settle on the initial LoadingFirstPage snapshot', async () => {
+		const subscription = paginatedSubscription();
+		const { result, firstValue } = openDetachedPaginatedQuery(
+			ref,
+			{},
+			{
+				initialNumItems: 10,
+				scope: 'route',
+				immediate: true
+			}
+		);
+		paginatedCallbacks().onUpdate(); // Convex may notify before the page arrived
+
+		expect(await settledState(firstValue)).toBe('pending');
+		expect(result.isLoading).toBe(true);
+
+		subscription.deliver([{ id: 1 }]);
+		paginatedCallbacks().onUpdate();
+		expect(await settledState(firstValue)).toBe('resolved');
+	});
+
+	it('settles on an empty, exhausted first page', async () => {
+		const subscription = paginatedSubscription();
+		const { result, firstValue } = openDetachedPaginatedQuery(
+			ref,
+			{},
+			{
+				initialNumItems: 10,
+				scope: 'route',
+				immediate: true
+			}
+		);
+
+		subscription.deliver([], 'Exhausted');
+		paginatedCallbacks().onUpdate();
+
+		expect(await settledState(firstValue)).toBe('resolved');
+		expect(result.status).toBe('Exhausted');
+	});
+
+	it('subscribes synchronously and resolves with the first page', async () => {
+		const subscription = paginatedSubscription();
+		const { result, firstValue } = openDetachedPaginatedQuery(
+			ref,
+			{},
+			{
+				initialNumItems: 10,
+				scope: 'route',
+				immediate: true
+			}
+		);
+		expect(deferred).toHaveLength(0);
+		expect(await settledState(firstValue)).toBe('pending');
+
+		subscription.deliver([{ id: 1 }]);
+		paginatedCallbacks().onUpdate();
+
+		expect(await settledState(firstValue)).toBe('resolved');
+		expect(result.results).toEqual([{ id: 1 }]);
+		expect(result.isLoading).toBe(false);
+	});
+
+	it('uses an already available first page right away', async () => {
+		const subscription = paginatedSubscription();
+		subscription.deliver([{ id: 'cached' }]);
+
+		const { result, firstValue } = openDetachedPaginatedQuery(
+			ref,
+			{},
+			{
+				initialNumItems: 10,
+				scope: 'route',
+				immediate: true
+			}
+		);
+
+		expect(result.results).toEqual([{ id: 'cached' }]);
+		expect(await settledState(firstValue)).toBe('resolved');
+	});
+
+	it('rejects with the query error', async () => {
+		paginatedSubscription();
+		const { firstValue } = openDetachedPaginatedQuery(
+			ref,
+			{},
+			{
+				initialNumItems: 10,
+				scope: 'route',
+				immediate: true
+			}
+		);
+
+		paginatedCallbacks().onError(new Error('boom'));
+
+		await expect(firstValue).rejects.toThrow('boom');
+	});
+
+	it('rejects when disposed before the first page', async () => {
+		paginatedSubscription();
+		const { result, firstValue } = openDetachedPaginatedQuery(
+			ref,
+			{},
+			{
+				initialNumItems: 10,
+				scope: 'route',
+				immediate: true
+			}
+		);
+
+		result.dispose();
+
+		await expect(firstValue).rejects.toThrow('disposed before its first result');
+	});
+
+	it('rejects right away for an inactive client', async () => {
+		client.disabled = true;
+
+		const { firstValue } = openDetachedPaginatedQuery(
+			ref,
+			{},
+			{
+				initialNumItems: 10,
+				scope: 'route',
+				immediate: true
+			}
+		);
+
+		await expect(firstValue).rejects.toThrow('disabled or closed');
 	});
 });

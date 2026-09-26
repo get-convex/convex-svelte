@@ -463,3 +463,48 @@ describe('closeConvex()', () => {
 		expect(handle.opens).toBe(1);
 	});
 });
+
+describe('RouteQuery — holdWhile (load awaiting its first value)', () => {
+	it('does not time out while the first value is pending (e.g. offline)', async () => {
+		configureKeepAlive(false);
+		const { handle, query } = createQuery();
+		let settle = () => {};
+		query.holdWhile(new Promise<void>((resolve) => (settle = resolve)));
+
+		vi.advanceTimersByTime(UNCLAIMED_TIMEOUT_MS * 10);
+		expect(handle.isOpen).toBe(true);
+
+		settle();
+		await Promise.resolve();
+		await Promise.resolve();
+		vi.advanceTimersByTime(UNCLAIMED_TIMEOUT_MS);
+		expect(handle.isOpen).toBe(false);
+	});
+
+	it('restarts the unclaimed timeout after a rejected first value too', async () => {
+		configureKeepAlive(false);
+		const { handle, query } = createQuery();
+		let fail = () => {};
+		const pending = new Promise<void>((_, reject) => (fail = () => reject(new Error('x'))));
+		pending.catch(() => {});
+		query.holdWhile(pending);
+
+		fail();
+		await Promise.resolve();
+		await Promise.resolve();
+		vi.advanceTimersByTime(UNCLAIMED_TIMEOUT_MS);
+
+		expect(handle.isOpen).toBe(false);
+	});
+
+	it('has no effect once the route claimed the query', async () => {
+		const { query, result } = createQuery();
+		reconcileRouteQueries({ doc: result });
+
+		query.holdWhile(Promise.resolve());
+		await Promise.resolve();
+		vi.advanceTimersByTime(UNCLAIMED_TIMEOUT_MS * 10);
+
+		expect(query.phase).toBe('active');
+	});
+});
