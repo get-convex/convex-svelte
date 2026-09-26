@@ -26,6 +26,10 @@ let _singletonUrl: string | null = null;
 // ---------------------------------------------------------------------------
 let _deferredSubscriptions: Array<() => void> | null = [];
 
+// Set by the first flush and never reset (not even by closeConvex): loads that
+// run before it belong to the initial page hydration.
+let _hasFlushedOnce = false;
+
 // Teardown hooks run by closeConvex(), e.g. to dispose route-scoped queries.
 // Registered by callers so this core module does not depend on them.
 const _closeListeners = new Set<() => void>();
@@ -59,10 +63,21 @@ export function deferSubscription(fn: () => void): void {
  * Safe to call multiple times — subsequent calls are no-ops.
  */
 export function flushDeferredSubscriptions(): void {
+	_hasFlushedOnce = true;
 	if (_deferredSubscriptions === null) return;
 	const pending = _deferredSubscriptions;
 	_deferredSubscriptions = null; // Switch to immediate mode
 	for (const fn of pending) fn();
+}
+
+/**
+ * Whether the app is still hydrating the initial server-rendered page, i.e.
+ * `setupConvex()` / `setupAuth()` have not flushed deferred subscriptions yet.
+ * SvelteKit runs universal `load` functions for the initial page in this window.
+ * @internal
+ */
+export function isInitialHydration(): boolean {
+	return !_hasFlushedOnce;
 }
 
 export function getSingletonClient(): ConvexClient | null {

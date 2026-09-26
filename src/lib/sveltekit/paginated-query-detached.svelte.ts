@@ -22,6 +22,7 @@ import {
 	type PaginatedQueryConfig
 } from '../shared/paginated_query_state.js';
 import { markRouteQuery, type SubscriptionHandle } from './query-lifecycle.js';
+import { paginatedQueryKey } from './query-key.js';
 import { createRouteQuery } from './route-data.svelte.js';
 import type { DetachedQueryOptions } from './query-detached.svelte.js';
 
@@ -52,6 +53,23 @@ export function createDetachedPaginatedQuery<Query extends FunctionReference<'qu
 		initialData?: PaginatedReturnType<PageItem<Query>>;
 	} & DetachedQueryOptions
 ): DetachedPaginatedQueryResult<Query> {
+	return openDetachedPaginatedQuery(query, args, options).result;
+}
+
+/**
+ * Like {@link createDetachedPaginatedQuery}, plus the pieces `convexLoadPaginated`
+ * needs to get its first page from the live subscription instead of a separate
+ * one-shot query. See `openDetachedQuery` for `immediate` and `firstValue`.
+ * @internal
+ */
+export function openDetachedPaginatedQuery<Query extends FunctionReference<'query'>>(
+	query: Query,
+	args: WithoutPaginationOpts<FunctionArgs<Query>>,
+	options: {
+		initialNumItems: number;
+		initialData?: PaginatedReturnType<PageItem<Query>>;
+	} & DetachedQueryOptions & { immediate?: boolean }
+): { result: DetachedPaginatedQueryResult<Query>; firstValue: Promise<void> } {
 	const client = getConvexClient();
 
 	// Create the framework-agnostic state machine
@@ -84,12 +102,65 @@ export function createDetachedPaginatedQuery<Query extends FunctionReference<'qu
 	}
 	machine.subscribe(syncState);
 
+	let settleFirstValue: ((error?: Error) => void) | undefined;
+	const firstValue = new Promise<void>((resolve, reject) => {
+		settleFirstValue = (e) => {
+			settleFirstValue = undefined;
+			if (e) reject(e);
+			else resolve();
+		};
+	});
+	// Only convexLoadPaginated awaits it; don't report rejections nobody listens to.
+	firstValue.catch(() => {});
+
 	let unsubscribe: (() => void) | undefined;
 	let wanted = false;
+	let immediate = options.immediate ?? false;
 	// Incremented on every close. Convex identifies a paginated query by its
 	// args, so a loadMore callback from a closed subscription would otherwise
 	// throw or load pages into a newer subscription with the same args.
 	let generation = 0;
+
+	const subscribe = () => {
+		// Skip if closed again before a deferred subscribe ran, or already open.
+		if (!wanted || unsubscribe || !isClientActive(client)) return;
+		const subscriptionGeneration = generation;
+		const loadMoreWhileOpen = (loadMore: (numItems: number) => boolean) => (numItems: number) =>
+			subscriptionGeneration === generation && loadMore(numItems);
+
+		// Create subscription
+		const subscription = client.onPaginatedUpdate_experimental(
+			query,
+			args,
+			{ initialNumItems: options.initialNumItems },
+			() => {
+				const current = subscription.getCurrentValue?.();
+				if (!current) return;
+				machine.onUpdate({
+					results: current.results as PageItem<Query>[],
+					status: current.status,
+					loadMore: loadMoreWhileOpen(current.loadMore)
+				});
+				settleFirstValue?.();
+			},
+			(e: Error) => {
+				machine.onError(e);
+				settleFirstValue?.(e);
+			}
+		);
+		unsubscribe = subscription;
+
+		// Check for synchronously available cached value
+		const current = subscription.getCurrentValue?.();
+		if (current) {
+			machine.onUpdate({
+				results: current.results as PageItem<Query>[],
+				status: current.status,
+				loadMore: loadMoreWhileOpen(current.loadMore)
+			});
+			settleFirstValue?.();
+		}
+	};
 
 	const handle: SubscriptionHandle = {
 		open() {
@@ -97,49 +168,19 @@ export function createDetachedPaginatedQuery<Query extends FunctionReference<'qu
 			// queueing: the server never flushes the deferred queue.
 			if (!isClientActive(client)) return;
 			wanted = true;
+			if (immediate) {
+				immediate = false;
+				subscribe();
+				return;
+			}
 			// Defer subscription until setupAuth (or setupConvex for no-auth apps)
 			// calls flushDeferredSubscriptions(). See query-detached.svelte.ts.
-			deferSubscription(() => {
-				// Skip if closed again before the deferred subscribe ran, or already open.
-				if (!wanted || unsubscribe || !isClientActive(client)) return;
-				const subscriptionGeneration = generation;
-				const loadMoreWhileOpen = (loadMore: (numItems: number) => boolean) => (numItems: number) =>
-					subscriptionGeneration === generation && loadMore(numItems);
-
-				// Create subscription
-				const subscription = client.onPaginatedUpdate_experimental(
-					query,
-					args,
-					{ initialNumItems: options.initialNumItems },
-					() => {
-						const current = subscription.getCurrentValue?.();
-						if (!current) return;
-						machine.onUpdate({
-							results: current.results as PageItem<Query>[],
-							status: current.status,
-							loadMore: loadMoreWhileOpen(current.loadMore)
-						});
-					},
-					(e: Error) => {
-						machine.onError(e);
-					}
-				);
-				unsubscribe = subscription;
-
-				// Check for synchronously available cached value
-				const current = subscription.getCurrentValue?.();
-				if (current) {
-					machine.onUpdate({
-						results: current.results as PageItem<Query>[],
-						status: current.status,
-						loadMore: loadMoreWhileOpen(current.loadMore)
-					});
-				}
-			});
+			deferSubscription(subscribe);
 		},
 		close() {
 			wanted = false;
 			generation += 1;
+			settleFirstValue?.(new Error('The query was disposed before its first result.'));
 			unsubscribe?.();
 			unsubscribe = undefined;
 		}
@@ -149,6 +190,8 @@ export function createDetachedPaginatedQuery<Query extends FunctionReference<'qu
 		// Notify machine of initial args
 		const argsKey = serializeArgsKey(args as Record<string, Value>);
 		machine.onArgsChange(argsKey);
+	} else if (options.immediate) {
+		settleFirstValue?.(new Error('The ConvexClient is disabled or closed.'));
 	}
 
 	let disposed = false;
@@ -186,16 +229,22 @@ export function createDetachedPaginatedQuery<Query extends FunctionReference<'qu
 	// Inactive clients never subscribe, so they need no route lifecycle (or its timers).
 	if (options.scope !== 'route' || !isClientActive(client)) {
 		handle.open();
-		return createResult(
+		const result = createResult(
 			() => {},
 			() => handle.close()
 		);
+		return { result, firstValue };
 	}
 
-	const key = `paginated|${getFunctionName(query)}|${serializeArgsKey(args as Record<string, Value>)}|${options.initialNumItems}`;
-	const route = createRouteQuery(handle, options.keepAlive ?? true, key);
-	return markRouteQuery(
+	const route = createRouteQuery(
+		handle,
+		options.keepAlive ?? true,
+		paginatedQueryKey(getFunctionName(query), args, options.initialNumItems)
+	);
+	if (options.immediate) route.query.holdWhile(firstValue);
+	const result = markRouteQuery(
 		createResult(route.track, () => route.query.dispose()),
 		route.query
 	);
+	return { result, firstValue };
 }
