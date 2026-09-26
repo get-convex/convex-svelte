@@ -3,21 +3,30 @@
  *
  * On the server, convexLoad fetches via ConvexHttpClient (auth-aware if token provided).
  * On the client, transport.decode upgrades it to a live subscription.
- * On client-side navigation, convexLoad creates a live subscription directly.
+ * On client-side navigation, convexLoad opens a live subscription directly and
+ * awaits its first value. While the initial page hydrates, it reuses the server's
+ * result from the SSR payload instead (see hydration.ts).
  *
  * Subscriptions created here are route-scoped: they are released once the current
  * route no longer uses them (see query-lifecycle.ts).
  */
-import type { FunctionReference, FunctionArgs } from 'convex/server';
+import type { FunctionReference, FunctionArgs, FunctionReturnType } from 'convex/server';
 import { getFunctionName, makeFunctionReference } from 'convex/server';
 import { ConvexHttpClient } from 'convex/browser';
-import { getConvexUrl, getConvexClient, _getServerToken } from '../internal/singleton.js';
-import { createDetachedQuery, type DetachedQueryResult } from './query-detached.svelte.js';
+import { getConvexUrl, _getServerToken } from '../internal/singleton.js';
+import {
+	createDetachedQuery,
+	openDetachedQuery,
+	type DetachedQueryResult
+} from './query-detached.svelte.js';
 import {
 	createDetachedPaginatedQuery,
+	openDetachedPaginatedQuery,
 	type DetachedPaginatedQueryResult
 } from './paginated-query-detached.svelte.js';
 import type { PageItem, PaginatedReturnType, WithoutPaginationOpts } from '../shared/types.js';
+import { markTransported, recordForHydration, takeHydratedValue } from './hydration.js';
+import { paginatedQueryKey, queryKey } from './query-key.js';
 
 const IS_BROWSER = typeof globalThis.document !== 'undefined';
 
@@ -70,13 +79,15 @@ export class ConvexLoadResult<T = unknown> {
  *
  * @param ref - A query FunctionReference like `api.tasks.get`.
  * @param args - Arguments for the query.
- * @param options - Optional `{ token }` for authenticated server-side fetches, and
- * `{ keepAlive: false }` to unsubscribe as soon as the route no longer uses the query.
+ * @param options - Optional `{ token }` for authenticated server-side fetches,
+ * `{ keepAlive: false }` to unsubscribe as soon as the route no longer uses the query,
+ * and `{ hydrate: false }` to leave the result out of the SSR payload
+ * (see `convexLoadHydration`).
  */
 export async function convexLoad<Query extends FunctionReference<'query'>>(
 	ref: Query,
 	args: FunctionArgs<Query> | 'skip',
-	options?: { token?: string; keepAlive?: boolean }
+	options?: { token?: string; keepAlive?: boolean; hydrate?: boolean }
 ): Promise<DetachedQueryResult<Query>> {
 	if (args === 'skip') {
 		return {
@@ -89,15 +100,34 @@ export async function convexLoad<Query extends FunctionReference<'query'>>(
 	}
 	const keepAlive = options?.keepAlive ?? true;
 
+	const name = getFunctionName(ref);
+	const key = queryKey(name, args as Record<string, unknown>);
+
 	if (IS_BROWSER) {
-		// Client-side navigation: use the authenticated singleton ConvexClient
-		// for the initial fetch, then create a live subscription.
-		const client = getConvexClient();
-		const initialData = await client.query(ref, args);
-		return createDetachedQuery(ref, args, initialData, {
+		// Initial page hydration: reuse the server's result. The subscription is
+		// deferred until setupAuth / setupConvex, so it never runs unauthenticated.
+		const hydrated = takeHydratedValue(key);
+		if (hydrated) {
+			return createDetachedQuery(ref, args, hydrated.value as FunctionReturnType<Query>, {
+				scope: 'route',
+				keepAlive
+			});
+		}
+		// Client-side navigation: open the live subscription on the authenticated
+		// singleton ConvexClient and use its first value as the initial data —
+		// one subscription instead of a one-shot query followed by a subscription.
+		const { result, firstValue } = openDetachedQuery(ref, args, undefined, {
 			scope: 'route',
-			keepAlive
-		}) as DetachedQueryResult<Query>;
+			keepAlive,
+			immediate: true
+		});
+		try {
+			await firstValue;
+		} catch (e) {
+			result.dispose();
+			throw e;
+		}
+		return result;
 	}
 
 	// Server-side: HTTP fetch, wrap in ConvexLoadResult for transport.
@@ -108,13 +138,11 @@ export async function convexLoad<Query extends FunctionReference<'query'>>(
 		httpClient.setAuth(token);
 	}
 	const data = await httpClient.query(ref, args);
-	const name = getFunctionName(ref);
-	return new ConvexLoadResult(
-		name,
-		args as Record<string, unknown>,
-		data,
-		keepAlive
-	) as unknown as DetachedQueryResult<Query>;
+	const result = new ConvexLoadResult(name, args as Record<string, unknown>, data, keepAlive);
+	if (options?.hydrate !== false) {
+		recordForHydration(key, data, result);
+	}
+	return result as unknown as DetachedQueryResult<Query>;
 }
 
 /**
@@ -142,6 +170,8 @@ export function encodeConvexLoad(
 		(value != null && typeof value === 'object' && '__convexLoad' in value)
 	) {
 		const v = value as ConvexLoadResult;
+		// Reaches the browser through the transport — keep it out of the SSR payload.
+		markTransported(v);
 		return { refName: v.refName, args: v.args, data: v.data, keepAlive: v.keepAlive };
 	}
 	return false;
@@ -232,13 +262,14 @@ export class ConvexLoadPaginatedResult<T = unknown> {
  *
  * @param ref - A FunctionReference to a paginated query.
  * @param args - Query arguments (without `paginationOpts` — managed automatically).
- * @param options - `{ initialNumItems }` (required), optional `{ token }` for auth, and
- * `{ keepAlive: false }` to unsubscribe as soon as the route no longer uses the query.
+ * @param options - `{ initialNumItems }` (required), optional `{ token }` for auth,
+ * `{ keepAlive: false }` to unsubscribe as soon as the route no longer uses the query,
+ * and `{ hydrate: false }` to leave the first page out of the SSR payload.
  */
 export async function convexLoadPaginated<Query extends FunctionReference<'query'>>(
 	ref: Query,
 	args: WithoutPaginationOpts<FunctionArgs<Query>> | 'skip',
-	options: { initialNumItems: number; token?: string; keepAlive?: boolean }
+	options: { initialNumItems: number; token?: string; keepAlive?: boolean; hydrate?: boolean }
 ): Promise<DetachedPaginatedQueryResult<Query>> {
 	if (args === 'skip') {
 		return {
@@ -251,40 +282,60 @@ export async function convexLoadPaginated<Query extends FunctionReference<'query
 		} as DetachedPaginatedQueryResult<Query>;
 	}
 	const keepAlive = options.keepAlive ?? true;
+	const name = getFunctionName(ref);
+	const key = paginatedQueryKey(name, args as Record<string, unknown>, options.initialNumItems);
 
-	// Fetch the first page
+	if (IS_BROWSER) {
+		// Initial page hydration: reuse the server's first page (see convexLoad).
+		const hydrated = takeHydratedValue(key);
+		if (hydrated) {
+			return createDetachedPaginatedQuery(ref, args, {
+				initialNumItems: options.initialNumItems,
+				initialData: hydrated.value as PaginatedReturnType<PageItem<Query>>,
+				scope: 'route',
+				keepAlive
+			});
+		}
+		// Client-side navigation: open the live paginated subscription and use its
+		// first page — a one-shot query could not reuse it anyway, since the
+		// subscription's pagination args differ.
+		const { result, firstValue } = openDetachedPaginatedQuery(ref, args, {
+			initialNumItems: options.initialNumItems,
+			scope: 'route',
+			keepAlive,
+			immediate: true
+		});
+		try {
+			await firstValue;
+		} catch (e) {
+			result.dispose();
+			throw e;
+		}
+		return result;
+	}
+
+	// Server-side: HTTP fetch of the first page, wrap in marker class for transport
 	const fullArgs = {
 		...args,
 		paginationOpts: { numItems: options.initialNumItems, cursor: null }
 	} as FunctionArgs<Query>;
-
-	if (IS_BROWSER) {
-		// Client-side navigation: use the authenticated singleton ConvexClient
-		const client = getConvexClient();
-		const data = (await client.query(ref, fullArgs)) as PaginatedReturnType<PageItem<Query>>;
-		return createDetachedPaginatedQuery(ref, args, {
-			initialNumItems: options.initialNumItems,
-			initialData: data,
-			scope: 'route',
-			keepAlive
-		});
-	}
-
-	// Server-side: HTTP fetch, wrap in marker class for transport
 	const httpClient = new ConvexHttpClient(getConvexUrl());
 	const token = options.token ?? _getServerToken();
 	if (token) {
 		httpClient.setAuth(token);
 	}
 	const data = (await httpClient.query(ref, fullArgs)) as PaginatedReturnType<PageItem<Query>>;
-	const name = getFunctionName(ref);
-	return new ConvexLoadPaginatedResult(
+	const result = new ConvexLoadPaginatedResult(
 		name,
 		args as Record<string, unknown>,
 		options.initialNumItems,
 		data,
 		keepAlive
-	) as unknown as DetachedPaginatedQueryResult<Query>;
+	);
+	if (options.hydrate !== false) {
+		recordForHydration(key, data, result);
+	}
+	return result as unknown as DetachedPaginatedQueryResult<Query>;
 }
 
 /**
@@ -319,6 +370,8 @@ export function encodeConvexLoadPaginated(value: unknown):
 		(value != null && typeof value === 'object' && '__convexLoadPaginated' in value)
 	) {
 		const v = value as ConvexLoadPaginatedResult;
+		// Reaches the browser through the transport — keep it out of the SSR payload.
+		markTransported(v);
 		return {
 			refName: v.refName,
 			args: v.args,

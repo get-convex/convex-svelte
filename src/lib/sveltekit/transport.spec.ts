@@ -1,45 +1,64 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ---------------------------------------------------------------------------
-// Tests for convexLoad / convexLoadPaginated client-side navigation behavior.
+// Tests for convexLoad / convexLoadPaginated in the browser.
 //
-// Problem: On client-side navigation (browser), convexLoad currently creates
-// a new unauthenticated ConvexHttpClient. This means authenticated queries
-// fail in +page.ts universal load functions during client-side navigation.
-//
-// Fix: Use the singleton ConvexClient (already authenticated via setupAuth)
-// for the initial fetch on the client side.
+// - Client-side navigation opens ONE live subscription on the authenticated
+//   singleton ConvexClient and awaits its first value — no one-shot
+//   client.query() followed by a second subscription, no ConvexHttpClient.
+// - During the initial hydration, the server's result from the SSR payload is
+//   reused and the subscription is deferred until auth is set up.
 // ---------------------------------------------------------------------------
 
 // All mock variables must live inside vi.hoisted so they exist when
 // vi.mock factories execute (vi.mock is hoisted above normal declarations).
-const { mockSingletonQuery, mockHttpClientQuery, mockHttpClientConstructed, MockConvexHttpClient } =
-	vi.hoisted(() => {
-		// Simulate browser environment BEFORE any module evaluates IS_BROWSER.
-		// IS_BROWSER = typeof globalThis.document !== 'undefined'
-		globalThis.document = {} as Document;
+const {
+	mockSingletonQuery,
+	mockHttpClientQuery,
+	mockHttpClientConstructed,
+	MockConvexHttpClient,
+	firstValue,
+	mockTakeHydratedValue
+} = vi.hoisted(() => {
+	// Simulate browser environment BEFORE any module evaluates IS_BROWSER.
+	// IS_BROWSER = typeof globalThis.document !== 'undefined'
+	globalThis.document = {} as Document;
 
-		const mockSingletonQuery = vi.fn();
-		const mockHttpClientQuery = vi.fn();
-		const mockSetAuth = vi.fn();
-		const mockHttpClientConstructed = vi.fn();
-		// Use a real class so `new ConvexHttpClient(...)` works in the module under test.
-		class MockConvexHttpClient {
-			query = mockHttpClientQuery;
-			setAuth = mockSetAuth;
-			constructor(...args: unknown[]) {
-				mockHttpClientConstructed(...args);
-			}
+	const mockSingletonQuery = vi.fn();
+	const mockHttpClientQuery = vi.fn();
+	const mockSetAuth = vi.fn();
+	const mockHttpClientConstructed = vi.fn();
+	// Use a real class so `new ConvexHttpClient(...)` works in the module under test.
+	class MockConvexHttpClient {
+		query = mockHttpClientQuery;
+		setAuth = mockSetAuth;
+		constructor(...args: unknown[]) {
+			mockHttpClientConstructed(...args);
 		}
+	}
 
-		return {
-			mockSingletonQuery,
-			mockHttpClientQuery,
-			mockSetAuth,
-			mockHttpClientConstructed,
-			MockConvexHttpClient
-		};
-	});
+	/** Controls the first value of the next subscription opened by convexLoad. */
+	const firstValue = {
+		resolve: () => {},
+		reject: (() => {}) as (e: Error) => void,
+		next(): Promise<void> {
+			return new Promise<void>((resolve, reject) => {
+				firstValue.resolve = resolve;
+				firstValue.reject = reject;
+			});
+		}
+	};
+
+	return {
+		mockSingletonQuery,
+		mockHttpClientQuery,
+		mockSetAuth,
+		mockHttpClientConstructed,
+		MockConvexHttpClient,
+		firstValue,
+		mockTakeHydratedValue: vi.fn<(key: string) => { value: unknown } | undefined>()
+	};
+});
 
 // --- Mock dependencies ---
 
@@ -57,6 +76,12 @@ vi.mock('convex/browser', () => ({
 	ConvexHttpClient: MockConvexHttpClient
 }));
 
+vi.mock('./hydration.js', () => ({
+	takeHydratedValue: mockTakeHydratedValue,
+	recordForHydration: vi.fn(),
+	markTransported: vi.fn()
+}));
+
 vi.mock('./query-detached.svelte.js', () => ({
 	createDetachedQuery: vi.fn(
 		(_ref: unknown, _args: unknown, initialData: unknown) =>
@@ -64,9 +89,14 @@ vi.mock('./query-detached.svelte.js', () => ({
 				data: initialData,
 				isLoading: false,
 				error: undefined,
-				isStale: false
+				isStale: false,
+				dispose: vi.fn()
 			}) as const
-	)
+	),
+	openDetachedQuery: vi.fn(() => ({
+		result: { data: ['live'], dispose: vi.fn() },
+		firstValue: firstValue.next()
+	}))
 }));
 
 vi.mock('./paginated-query-detached.svelte.js', () => ({
@@ -77,9 +107,14 @@ vi.mock('./paginated-query-detached.svelte.js', () => ({
 				status: 'CanLoadMore' as const,
 				isLoading: false,
 				error: undefined,
-				loadMore: () => false
+				loadMore: () => false,
+				dispose: vi.fn()
 			}) as const
-	)
+	),
+	openDetachedPaginatedQuery: vi.fn(() => ({
+		result: { results: ['live'], dispose: vi.fn() },
+		firstValue: firstValue.next()
+	}))
 }));
 
 vi.mock('convex/server', () => ({
@@ -97,131 +132,194 @@ import {
 	encodeConvexLoadPaginated,
 	decodeConvexLoadPaginated
 } from './transport.svelte.js';
-import { createDetachedQuery } from './query-detached.svelte.js';
-import { createDetachedPaginatedQuery } from './paginated-query-detached.svelte.js';
+import { createDetachedQuery, openDetachedQuery } from './query-detached.svelte.js';
+import {
+	createDetachedPaginatedQuery,
+	openDetachedPaginatedQuery
+} from './paginated-query-detached.svelte.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mockRef = { _name: 'messages:list' } as any;
 
-describe('convexLoad — client-side navigation uses authenticated singleton', () => {
+/** Whether a promise settles once all pending microtasks have run. */
+async function isSettled(promise: Promise<unknown>): Promise<boolean> {
+	let settled = false;
+	promise.then(
+		() => (settled = true),
+		() => (settled = true)
+	);
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	return settled;
+}
+
+describe('convexLoad — client-side navigation opens a single live subscription', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		mockTakeHydratedValue.mockReturnValue(undefined);
 	});
 
-	it('uses getConvexClient().query() on client-side, NOT ConvexHttpClient', async () => {
-		const mockData = [{ id: '1', text: 'hello' }];
-		mockSingletonQuery.mockResolvedValueOnce(mockData);
+	it('opens one immediate route-scoped subscription and never runs a one-shot query', async () => {
+		const load = convexLoad(mockRef, { muteWords: [] });
+		firstValue.resolve();
+		const result = await load;
 
-		await convexLoad(mockRef, { muteWords: [] });
-
-		// Singleton ConvexClient should be used (authenticated)
-		expect(mockSingletonQuery).toHaveBeenCalledOnce();
-		expect(mockSingletonQuery).toHaveBeenCalledWith(mockRef, { muteWords: [] });
-
-		// ConvexHttpClient should NOT be used for the query
-		expect(mockHttpClientQuery).not.toHaveBeenCalled();
-	});
-
-	it('passes initial data from singleton query to createDetachedQuery', async () => {
-		const mockData = [{ id: '1', text: 'hello' }];
-		mockSingletonQuery.mockResolvedValueOnce(mockData);
-
-		await convexLoad(mockRef, { muteWords: [] });
-
-		expect(createDetachedQuery).toHaveBeenCalledWith(mockRef, { muteWords: [] }, mockData, {
+		expect(openDetachedQuery).toHaveBeenCalledOnce();
+		expect(openDetachedQuery).toHaveBeenCalledWith(mockRef, { muteWords: [] }, undefined, {
 			scope: 'route',
-			keepAlive: true
+			keepAlive: true,
+			immediate: true
 		});
+		expect(result.data).toEqual(['live']);
+		// No separate query: neither the singleton's one-shot query nor HTTP.
+		expect(mockSingletonQuery).not.toHaveBeenCalled();
+		expect(mockHttpClientConstructed).not.toHaveBeenCalled();
+		expect(createDetachedQuery).not.toHaveBeenCalled();
+	});
+
+	it('resolves only once the subscription delivered its first value', async () => {
+		const load = convexLoad(mockRef, {});
+
+		expect(await isSettled(load)).toBe(false);
+
+		firstValue.resolve();
+		expect(await isSettled(load)).toBe(true);
+	});
+
+	it('rejects with the query error and disposes the subscription', async () => {
+		const load = convexLoad(mockRef, {});
+		const { result } = vi.mocked(openDetachedQuery).mock.results[0].value;
+
+		firstValue.reject(new Error('boom'));
+
+		await expect(load).rejects.toThrow('boom');
+		expect(result.dispose).toHaveBeenCalledOnce();
 	});
 
 	it('passes keepAlive: false through to the route-scoped subscription', async () => {
-		mockSingletonQuery.mockResolvedValueOnce([]);
+		const load = convexLoad(mockRef, {}, { keepAlive: false });
+		firstValue.resolve();
+		await load;
 
-		await convexLoad(mockRef, {}, { keepAlive: false });
-
-		expect(createDetachedQuery).toHaveBeenCalledWith(mockRef, {}, [], {
+		expect(openDetachedQuery).toHaveBeenCalledWith(mockRef, {}, undefined, {
 			scope: 'route',
-			keepAlive: false
+			keepAlive: false,
+			immediate: true
 		});
-	});
-
-	it('does not create ConvexHttpClient on client-side', async () => {
-		mockSingletonQuery.mockResolvedValueOnce([]);
-
-		await convexLoad(mockRef, {});
-
-		expect(mockHttpClientConstructed).not.toHaveBeenCalled();
 	});
 });
 
-describe('convexLoadPaginated — client-side navigation uses authenticated singleton', () => {
+describe('convexLoad — initial hydration reuses the SSR payload', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 	});
 
-	it('uses getConvexClient().query() on client-side, NOT ConvexHttpClient', async () => {
-		const mockPaginatedData = {
-			page: [{ id: '1', text: 'hello' }],
-			isDone: false,
-			continueCursor: 'cursor1'
-		};
-		mockSingletonQuery.mockResolvedValueOnce(mockPaginatedData);
+	it('looks the result up by query key', async () => {
+		mockTakeHydratedValue.mockReturnValue({ value: ['ssr'] });
 
-		await convexLoadPaginated(mockRef, { muteWords: [] }, { initialNumItems: 10 });
+		await convexLoad(mockRef, { muteWords: [] });
 
-		// Singleton ConvexClient should be used (authenticated)
-		expect(mockSingletonQuery).toHaveBeenCalledOnce();
-		expect(mockSingletonQuery).toHaveBeenCalledWith(mockRef, {
-			muteWords: [],
-			paginationOpts: { numItems: 10, cursor: null }
-		});
-
-		// ConvexHttpClient should NOT be used for the query
-		expect(mockHttpClientQuery).not.toHaveBeenCalled();
+		expect(mockTakeHydratedValue).toHaveBeenCalledWith('messages:list|{"muteWords":[]}');
 	});
 
-	it('passes initial data from singleton query to createDetachedPaginatedQuery', async () => {
-		const mockPaginatedData = {
-			page: [{ id: '1', text: 'hello' }],
-			isDone: false,
-			continueCursor: 'cursor1'
-		};
-		mockSingletonQuery.mockResolvedValueOnce(mockPaginatedData);
+	it('uses the server result and defers the subscription (no immediate query)', async () => {
+		mockTakeHydratedValue.mockReturnValue({ value: ['ssr'] });
 
-		await convexLoadPaginated(mockRef, { muteWords: [] }, { initialNumItems: 10 });
+		const result = await convexLoad(mockRef, {}, { keepAlive: false });
 
-		expect(createDetachedPaginatedQuery).toHaveBeenCalledWith(
+		expect(result.data).toEqual(['ssr']);
+		expect(createDetachedQuery).toHaveBeenCalledWith(mockRef, {}, ['ssr'], {
+			scope: 'route',
+			keepAlive: false
+		});
+		expect(openDetachedQuery).not.toHaveBeenCalled();
+		expect(mockSingletonQuery).not.toHaveBeenCalled();
+	});
+
+	it('reuses falsy server results such as null', async () => {
+		mockTakeHydratedValue.mockReturnValue({ value: null });
+
+		const result = await convexLoad(mockRef, {});
+
+		expect(result.data).toBeNull();
+		expect(openDetachedQuery).not.toHaveBeenCalled();
+	});
+});
+
+describe('convexLoadPaginated — client-side navigation opens a single live subscription', () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mockTakeHydratedValue.mockReturnValue(undefined);
+	});
+
+	it('opens one immediate route-scoped subscription and never runs a one-shot query', async () => {
+		const load = convexLoadPaginated(mockRef, { muteWords: [] }, { initialNumItems: 10 });
+		firstValue.resolve();
+		const result = await load;
+
+		expect(openDetachedPaginatedQuery).toHaveBeenCalledOnce();
+		expect(openDetachedPaginatedQuery).toHaveBeenCalledWith(
 			mockRef,
 			{ muteWords: [] },
-			{
-				initialNumItems: 10,
-				initialData: mockPaginatedData,
-				scope: 'route',
-				keepAlive: true
-			}
+			{ initialNumItems: 10, scope: 'route', keepAlive: true, immediate: true }
 		);
+		expect(result.results).toEqual(['live']);
+		expect(mockSingletonQuery).not.toHaveBeenCalled();
+		expect(mockHttpClientConstructed).not.toHaveBeenCalled();
+	});
+
+	it('resolves only once the subscription delivered its first page', async () => {
+		const load = convexLoadPaginated(mockRef, {}, { initialNumItems: 5 });
+
+		expect(await isSettled(load)).toBe(false);
+
+		firstValue.resolve();
+		expect(await isSettled(load)).toBe(true);
+	});
+
+	it('rejects with the query error and disposes the subscription', async () => {
+		const load = convexLoadPaginated(mockRef, {}, { initialNumItems: 5 });
+		const { result } = vi.mocked(openDetachedPaginatedQuery).mock.results[0].value;
+
+		firstValue.reject(new Error('boom'));
+
+		await expect(load).rejects.toThrow('boom');
+		expect(result.dispose).toHaveBeenCalledOnce();
 	});
 
 	it('passes keepAlive: false through to the route-scoped subscription', async () => {
-		const mockPaginatedData = { page: [], isDone: true, continueCursor: '' };
-		mockSingletonQuery.mockResolvedValueOnce(mockPaginatedData);
+		const load = convexLoadPaginated(mockRef, {}, { initialNumItems: 5, keepAlive: false });
+		firstValue.resolve();
+		await load;
 
-		await convexLoadPaginated(mockRef, {}, { initialNumItems: 5, keepAlive: false });
-
-		expect(createDetachedPaginatedQuery).toHaveBeenCalledWith(
+		expect(openDetachedPaginatedQuery).toHaveBeenCalledWith(
 			mockRef,
 			{},
-			{ initialNumItems: 5, initialData: mockPaginatedData, scope: 'route', keepAlive: false }
+			{ initialNumItems: 5, scope: 'route', keepAlive: false, immediate: true }
 		);
 	});
+});
 
-	it('does not create ConvexHttpClient on client-side', async () => {
-		const mockPaginatedData = { page: [], isDone: true, continueCursor: '' };
-		mockSingletonQuery.mockResolvedValueOnce(mockPaginatedData);
+describe('convexLoadPaginated — initial hydration reuses the SSR payload', () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+	});
 
-		await convexLoadPaginated(mockRef, {}, { initialNumItems: 5 });
+	it('looks the first page up by paginated query key (page size included)', async () => {
+		const page = { page: [{ id: 1 }], isDone: false, continueCursor: 'c' };
+		mockTakeHydratedValue.mockReturnValue({ value: page });
 
-		expect(mockHttpClientConstructed).not.toHaveBeenCalled();
+		const result = await convexLoadPaginated(mockRef, { muteWords: [] }, { initialNumItems: 10 });
+
+		expect(mockTakeHydratedValue).toHaveBeenCalledWith(
+			'paginated|messages:list|{"muteWords":[]}|10'
+		);
+		expect(result.results).toEqual([{ id: 1 }]);
+		expect(createDetachedPaginatedQuery).toHaveBeenCalledWith(
+			mockRef,
+			{ muteWords: [] },
+			{ initialNumItems: 10, initialData: page, scope: 'route', keepAlive: true }
+		);
+		expect(openDetachedPaginatedQuery).not.toHaveBeenCalled();
 	});
 });
 
