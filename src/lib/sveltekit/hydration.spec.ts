@@ -168,6 +168,17 @@ describe('findTag — server', () => {
 		expect(hydration.findTag(html, '</head')).toBe(html.lastIndexOf('</head>'));
 	});
 
+	it.each([
+		['a doctype', '<!DOCTYPE html><head></head><body>', 21],
+		// Bogus comments end at the first `>`, for the browser's parser too.
+		['a processing instruction', '<head><?x </head ?></head><body>', 19],
+		['a CDATA-like declaration', '<head><![CDATA[ </head> ]]></head><body>', 27]
+	])('handles %s like the HTML parser', async (_name, html, expected) => {
+		const { hydration } = await loadModules();
+
+		expect(hydration.findTag(html, '</head')).toBe(expected);
+	});
+
 	it('keeps indices exact when lowercasing would change the length ("İ")', async () => {
 		const { hydration } = await loadModules();
 		const html = '<head><title>İstanbul</title></head><body>';
