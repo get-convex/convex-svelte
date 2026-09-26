@@ -26,6 +26,18 @@ let _singletonUrl: string | null = null;
 // ---------------------------------------------------------------------------
 let _deferredSubscriptions: Array<() => void> | null = [];
 
+// Teardown hooks run by closeConvex(), e.g. to dispose route-scoped queries.
+// Registered by callers so this core module does not depend on them.
+const _closeListeners = new Set<() => void>();
+
+/**
+ * Run `fn` whenever `closeConvex()` closes the client.
+ * @internal
+ */
+export function onCloseConvex(fn: () => void): void {
+	_closeListeners.add(fn);
+}
+
 /**
  * Queue a subscription to fire after auth is ready.
  * If already flushed (auth ready), fires immediately.
@@ -81,6 +93,7 @@ export async function closeConvex(): Promise<void> {
 	// Restore defer mode so the next init cycle coordinates with setupAuth
 	// again instead of firing subscriptions immediately.
 	_deferredSubscriptions = [];
+	for (const fn of _closeListeners) fn();
 	if (client && !client.closed) {
 		await client.close();
 	}

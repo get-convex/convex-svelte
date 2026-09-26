@@ -2,14 +2,19 @@
 // Import from 'convex-svelte/sveltekit'
 
 // Client lifecycle (module singleton)
-export { initConvex } from './client.js';
+export { initConvex, type InitConvexOptions } from './client.js';
+export type { KeepAliveOptions } from './query-lifecycle.js';
 export { getConvexUrl, closeConvex, _getServerToken } from '../internal/singleton.js';
 
 // Server-side HTTP client
 export { createConvexHttpClient, type CreateConvexHttpClientOptions } from './server.js';
 
 // Detached query (non-component subscriptions)
-export { createDetachedQuery, type DetachedQueryResult } from './query-detached.svelte.js';
+export {
+	createDetachedQuery,
+	type DetachedQueryResult,
+	type DetachedQueryOptions
+} from './query-detached.svelte.js';
 
 // Detached paginated query (non-component paginated subscriptions)
 export {
