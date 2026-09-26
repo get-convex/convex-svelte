@@ -476,17 +476,64 @@ describe('openDetachedPaginatedQuery — immediate subscription with first page'
 		return { onUpdate, onError };
 	}
 
-	/** A subscription whose current value can be set by the test. */
+	/**
+	 * A subscription whose current value can be set by the test. Like Convex,
+	 * it reports `LoadingFirstPage` right away, before any page arrived.
+	 */
 	function paginatedSubscription() {
-		let current: { results: unknown[]; status: 'CanLoadMore'; loadMore: () => boolean } | undefined;
+		let current: { results: unknown[]; status: string; loadMore: () => boolean } = {
+			results: [],
+			status: 'LoadingFirstPage',
+			loadMore: () => false
+		};
 		const subscription = Object.assign(vi.fn(), { getCurrentValue: () => current });
 		client.onPaginatedUpdate_experimental.mockReturnValueOnce(subscription);
 		return {
-			deliver(results: unknown[]) {
-				current = { results, status: 'CanLoadMore', loadMore: () => true };
+			deliver(results: unknown[], status = 'CanLoadMore') {
+				current = { results, status, loadMore: () => true };
 			}
 		};
 	}
+
+	it('does not settle on the initial LoadingFirstPage snapshot', async () => {
+		const subscription = paginatedSubscription();
+		const { result, firstValue } = openDetachedPaginatedQuery(
+			ref,
+			{},
+			{
+				initialNumItems: 10,
+				scope: 'route',
+				immediate: true
+			}
+		);
+		paginatedCallbacks().onUpdate(); // Convex may notify before the page arrived
+
+		expect(await settledState(firstValue)).toBe('pending');
+		expect(result.isLoading).toBe(true);
+
+		subscription.deliver([{ id: 1 }]);
+		paginatedCallbacks().onUpdate();
+		expect(await settledState(firstValue)).toBe('resolved');
+	});
+
+	it('settles on an empty, exhausted first page', async () => {
+		const subscription = paginatedSubscription();
+		const { result, firstValue } = openDetachedPaginatedQuery(
+			ref,
+			{},
+			{
+				initialNumItems: 10,
+				scope: 'route',
+				immediate: true
+			}
+		);
+
+		subscription.deliver([], 'Exhausted');
+		paginatedCallbacks().onUpdate();
+
+		expect(await settledState(firstValue)).toBe('resolved');
+		expect(result.status).toBe('Exhausted');
+	});
 
 	it('subscribes synchronously and resolves with the first page', async () => {
 		const subscription = paginatedSubscription();

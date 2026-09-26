@@ -18,14 +18,19 @@ test.describe('convexLoad — SSR hydration payload', () => {
 
 		expect(html).toContain('data-convex-load');
 		expect(html).toContain('__e2e_release_a__');
+		// In <head>, so it exists before SvelteKit's start script runs the loads.
+		expect(html.indexOf('data-convex-load')).toBeLessThan(html.indexOf('</head>'));
 	});
 
-	test('does not embed server-load results again (they use the transport)', async ({ page }) => {
+	test('never embeds server-load results (returned ones use the transport)', async ({ page }) => {
 		const websocket = recordWebSocket(page);
 		const response = await page.goto('/tests/convex-load-server');
 		const html = (await response?.text()) ?? '';
 
-		expect(html).not.toContain('data-convex-load');
+		// The handle marks the page with an (empty) payload…
+		expect(html).toContain('data-convex-load>{}<');
+		// …and a result the server load only used internally never appears.
+		expect(html).not.toContain('__e2e_server_private__');
 		// Still rendered from SSR and upgraded to a live subscription.
 		await expect(page.getByTestId('data')).toBeVisible();
 		await expect(page.getByTestId('hydrated')).toContainText('true');

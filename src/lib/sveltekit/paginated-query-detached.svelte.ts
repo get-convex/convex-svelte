@@ -127,6 +127,20 @@ export function openDetachedPaginatedQuery<Query extends FunctionReference<'quer
 		const subscriptionGeneration = generation;
 		const loadMoreWhileOpen = (loadMore: (numItems: number) => boolean) => (numItems: number) =>
 			subscriptionGeneration === generation && loadMore(numItems);
+		// Convex reports `LoadingFirstPage` (with no results) until the first
+		// page arrived — only then is there a first value to hand to the load.
+		const onSnapshot = (current: {
+			results: unknown[];
+			status: PaginationStatus;
+			loadMore: (numItems: number) => boolean;
+		}) => {
+			machine.onUpdate({
+				results: current.results as PageItem<Query>[],
+				status: current.status,
+				loadMore: loadMoreWhileOpen(current.loadMore)
+			});
+			if (current.status !== 'LoadingFirstPage') settleFirstValue?.();
+		};
 
 		// Create subscription
 		const subscription = client.onPaginatedUpdate_experimental(
@@ -135,13 +149,7 @@ export function openDetachedPaginatedQuery<Query extends FunctionReference<'quer
 			{ initialNumItems: options.initialNumItems },
 			() => {
 				const current = subscription.getCurrentValue?.();
-				if (!current) return;
-				machine.onUpdate({
-					results: current.results as PageItem<Query>[],
-					status: current.status,
-					loadMore: loadMoreWhileOpen(current.loadMore)
-				});
-				settleFirstValue?.();
+				if (current) onSnapshot(current);
 			},
 			(e: Error) => {
 				machine.onError(e);
@@ -152,14 +160,7 @@ export function openDetachedPaginatedQuery<Query extends FunctionReference<'quer
 
 		// Check for synchronously available cached value
 		const current = subscription.getCurrentValue?.();
-		if (current) {
-			machine.onUpdate({
-				results: current.results as PageItem<Query>[],
-				status: current.status,
-				loadMore: loadMoreWhileOpen(current.loadMore)
-			});
-			settleFirstValue?.();
-		}
+		if (current) onSnapshot(current);
 	};
 
 	const handle: SubscriptionHandle = {

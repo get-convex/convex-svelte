@@ -9,5 +9,5 @@
 
 ### Features
 
-- **`convexLoadHydration`** - new SvelteKit `handle` exported from `convex-svelte/sveltekit/server`. Add it to `hooks.server.ts` (combine with your own handle via `sequence()`) to embed `convexLoad` results of universal loads in the SSR HTML. Results of server loads (`+page.server.ts`) already reach the browser through the transport and are not embedded again.
-- **`hydrate: false`** - `convexLoad` / `convexLoadPaginated` option to leave a result out of the SSR payload, e.g. for large results.
+- **`convexLoadHydration`** - new SvelteKit `handle` exported from `convex-svelte/sveltekit/server`. Add it to `hooks.server.ts` (combine with your own handle via `sequence()`) to embed `convexLoad` results of universal loads in the SSR HTML. Only results of universal loads are embedded: server loads (`+page.server.ts`) never are, not even results they use internally, and the ones they return reach the browser through the transport. Universal loads are detected via SvelteKit's internal `is_in_universal_load` request-store flag (also used by SvelteKit's remote functions). If a SvelteKit version doesn't expose it, nothing is embedded and a warning is logged. Streamed (not awaited) `convexLoad` promises are not embedded; in development, a warning points out loads that miss the payload during hydration.
+- **`hydrate: false`** - `convexLoad` / `convexLoadPaginated` option to leave a result out of the SSR payload, e.g. a large one. That load then queries Convex during hydration, before `setupAuth()`, as it did without the handle.

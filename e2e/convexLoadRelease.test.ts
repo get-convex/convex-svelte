@@ -157,10 +157,21 @@ test.describe('convexLoadPaginated — one subscription per query', () => {
 		await expect(page.getByRole('link', { name: /ConvexLoadPaginated/ })).toBeVisible();
 		const mark = websocket.mark();
 
+		// The load awaits the first page, so the new page never renders a loading state.
+		await page.evaluate(() => {
+			const w = window as Window & { __sawLoading?: boolean };
+			new MutationObserver(() => {
+				if (document.querySelector('[data-testid="loading"]')) w.__sawLoading = true;
+			}).observe(document.body, { childList: true, subtree: true });
+		});
+
 		await page.getByRole('link', { name: /ConvexLoadPaginated/ }).click();
 		await expect(page.getByTestId('data')).toBeVisible({ timeout: 10000 });
 		await page.waitForTimeout(1000);
 
 		expect(websocket.queryEvents(isPaginatedList, mark).map((e) => e.type)).toEqual(['Add']);
+		expect(
+			await page.evaluate(() => (window as Window & { __sawLoading?: boolean }).__sawLoading)
+		).toBeUndefined();
 	});
 });

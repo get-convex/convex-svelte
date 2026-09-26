@@ -10,6 +10,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // for the initial hydration.
 // ---------------------------------------------------------------------------
 
+const env = vi.hoisted(() => ({ dev: false }));
+vi.mock('esm-env', () => ({
+	get DEV() {
+		return env.dev;
+	},
+	BROWSER: false
+}));
+
 type Hydration = typeof import('./hydration.js');
 type Singleton = typeof import('../internal/singleton.js');
 
@@ -26,7 +34,7 @@ function collectorWith(hydration: Hydration, entries: Record<string, unknown>) {
 	const collector: import('./hydration.js').HydrationCollector = new Map();
 	hydration._setHydrationCollectorGetter(() => collector);
 	for (const [key, value] of Object.entries(entries)) {
-		hydration.recordForHydration(key, value, {});
+		hydration.recordForHydration(key, value);
 	}
 	return collector;
 }
@@ -48,7 +56,7 @@ function installDocument(text: string | null) {
 }
 
 beforeEach(() => {
-	// Keep the payload element around between assertions in a test.
+	env.dev = false;
 	delete (globalThis as { document?: Document }).document;
 });
 
@@ -57,10 +65,10 @@ afterEach(() => {
 });
 
 describe('serializeHydrationPayload — server', () => {
-	it('returns an empty string when nothing was recorded', async () => {
+	it('emits an empty payload when nothing was recorded (marks the handle as active)', async () => {
 		const { hydration } = await loadModules();
 
-		expect(hydration.serializeHydrationPayload(new Map())).toBe('');
+		expect(scriptText(hydration.serializeHydrationPayload(new Map()))).toBe('{}');
 	});
 
 	it('cannot be broken out of: no raw "<" inside the script element', async () => {
@@ -83,25 +91,9 @@ describe('serializeHydrationPayload — server', () => {
 		expect(script.match(/<\/script/g)).toHaveLength(1);
 	});
 
-	it('skips results that reach the browser through the transport (server loads)', async () => {
-		const { hydration } = await loadModules();
-		const collector: import('./hydration.js').HydrationCollector = new Map();
-		hydration._setHydrationCollectorGetter(() => collector);
-		const universalResult = {};
-		const serverLoadResult = {};
-		hydration.recordForHydration('a|{}', 'universal', universalResult);
-		hydration.recordForHydration('b|{}', 'server', serverLoadResult);
-
-		hydration.markTransported(serverLoadResult);
-
-		expect(JSON.parse(scriptText(hydration.serializeHydrationPayload(collector)))).toEqual({
-			'a|{}': 'universal'
-		});
-	});
-
 	it('does not record undefined results or record outside a request scope', async () => {
 		const { hydration } = await loadModules();
-		expect(() => hydration.recordForHydration('a|{}', 'x', {})).not.toThrow();
+		expect(() => hydration.recordForHydration('a|{}', 'x')).not.toThrow();
 
 		const collector = collectorWith(hydration, { 'a|{}': undefined });
 
@@ -110,31 +102,42 @@ describe('serializeHydrationPayload — server', () => {
 });
 
 describe('injectHydrationPayload — server', () => {
-	it('inserts the payload before the closing body tag', async () => {
+	it("inserts the payload at the end of <head>, before SvelteKit's start script", async () => {
 		const { hydration } = await loadModules();
 		const collector = collectorWith(hydration, { 'a|{}': 1 });
 
-		const html = hydration.injectHydrationPayload('<html><body><p>x</p></body></html>', collector);
+		const html = hydration.injectHydrationPayload(
+			'<html><head><title>t</title></head><body><script>start()</script></body></html>',
+			collector
+		);
 
 		expect(html).toMatch(
-			/^<html><body><p>x<\/p><script [^>]*data-convex-load>.*<\/script><\/body><\/html>$/
+			/^<html><head><title>t<\/title><script [^>]*data-convex-load>.*<\/script><\/head><body><script>start\(\)/
 		);
 	});
 
-	it('appends the payload when the template has no body tag', async () => {
+	it('falls back to before <body>, then to the start of the document', async () => {
 		const { hydration } = await loadModules();
 		const collector = collectorWith(hydration, { 'a|{}': 1 });
 
+		expect(hydration.injectHydrationPayload('<body><p>x</p></body>', collector)).toMatch(
+			/^<script [^>]*data-convex-load>.*<\/script><body>/
+		);
 		expect(hydration.injectHydrationPayload('<p>x</p>', collector)).toMatch(
-			/^<p>x<\/p><script [^>]*data-convex-load>/
+			/^<script [^>]*data-convex-load>.*<\/script><p>x<\/p>$/
 		);
 	});
 
-	it('leaves the HTML untouched when nothing was recorded', async () => {
+	it('uses the first </head> (the document head, not page content)', async () => {
 		const { hydration } = await loadModules();
-		const html = '<html><body></body></html>';
+		const collector = collectorWith(hydration, { 'a|{}': 1 });
 
-		expect(hydration.injectHydrationPayload(html, new Map())).toBe(html);
+		const html = hydration.injectHydrationPayload(
+			'<head></head><body><pre></head></pre></body>',
+			collector
+		);
+
+		expect(html.indexOf('data-convex-load')).toBeLessThan(html.indexOf('<body>'));
 	});
 });
 
@@ -219,5 +222,47 @@ describe('takeHydratedValue — browser', () => {
 
 		expect(singleton.isInitialHydration()).toBe(false);
 		expect(hydration.takeHydratedValue('k|{}')).toBeUndefined();
+	});
+});
+
+describe('warnHydrationMiss — browser, dev only', () => {
+	it('warns when the handle is active but a hydration load found no result', async () => {
+		env.dev = true;
+		const { hydration } = await loadModules();
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		installDocument('{}');
+		hydration.takeHydratedValue('k|{}');
+
+		hydration.warnHydrationMiss('messages:list');
+
+		expect(warn).toHaveBeenCalledOnce();
+		expect(warn.mock.calls[0][0]).toContain('messages:list');
+		warn.mockRestore();
+	});
+
+	it('stays quiet without the handle, in production, or after hydration', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+		env.dev = true;
+		let { hydration } = await loadModules();
+		installDocument(null);
+		hydration.takeHydratedValue('k|{}');
+		hydration.warnHydrationMiss('no-handle');
+
+		env.dev = false;
+		({ hydration } = await loadModules());
+		installDocument('{}');
+		hydration.takeHydratedValue('k|{}');
+		hydration.warnHydrationMiss('production');
+
+		env.dev = true;
+		const modules = await loadModules();
+		installDocument('{}');
+		modules.hydration.takeHydratedValue('k|{}');
+		modules.singleton.flushDeferredSubscriptions();
+		modules.hydration.warnHydrationMiss('after-hydration');
+
+		expect(warn).not.toHaveBeenCalled();
+		warn.mockRestore();
 	});
 });
