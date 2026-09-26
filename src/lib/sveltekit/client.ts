@@ -7,8 +7,20 @@
  */
 import { ConvexClient, type ConvexClientOptions } from 'convex/browser';
 import { getSingletonClient, getSingletonUrl, setSingleton } from '../internal/singleton.js';
+import { configureKeepAlive, type KeepAliveOptions } from './query-lifecycle.js';
 
 const IS_BROWSER = typeof globalThis.document !== 'undefined';
+
+export type InitConvexOptions = ConvexClientOptions & {
+	/**
+	 * Idle buffer for queries created by `convexLoad()` / `convexLoadPaginated()`.
+	 * When the current route no longer uses such a query, it stays subscribed until
+	 * `maxQueries` newer idle queries push it out or `maxIdleMs` passes, so back
+	 * navigation and revisits are instant. Pass `false` to unsubscribe immediately.
+	 * @default { maxQueries: 10, maxIdleMs: 60_000 }
+	 */
+	keepAlive?: KeepAliveOptions | false;
+};
 
 /**
  * Initialize the Convex client at module level (before any component mounts).
@@ -16,12 +28,16 @@ const IS_BROWSER = typeof globalThis.document !== 'undefined';
  * Idempotent — subsequent calls with the same URL are no-ops.
  *
  * @param url - Your Convex deployment URL (e.g. `PUBLIC_CONVEX_URL`).
- * @param options - Optional `ConvexClientOptions`.
+ * @param options - Optional `ConvexClientOptions`, plus `keepAlive` for `convexLoad()` queries.
  * @returns The singleton `ConvexClient` instance.
  */
-export function initConvex(url: string, options: ConvexClientOptions = {}): ConvexClient {
+export function initConvex(url: string, options: InitConvexOptions = {}): ConvexClient {
 	if (!url || typeof url !== 'string') {
 		throw new Error('initConvex requires a non-empty URL string');
+	}
+	const { keepAlive, ...clientOptions } = options;
+	if (keepAlive !== undefined) {
+		configureKeepAlive(keepAlive);
 	}
 	const existing = getSingletonClient();
 	if (existing) {
@@ -35,7 +51,7 @@ export function initConvex(url: string, options: ConvexClientOptions = {}): Conv
 		}
 		return existing;
 	}
-	const client = new ConvexClient(url, { disabled: !IS_BROWSER, ...options });
+	const client = new ConvexClient(url, { disabled: !IS_BROWSER, ...clientOptions });
 	setSingleton(url, client);
 	return client;
 }

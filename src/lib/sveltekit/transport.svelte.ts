@@ -4,6 +4,9 @@
  * On the server, convexLoad fetches via ConvexHttpClient (auth-aware if token provided).
  * On the client, transport.decode upgrades it to a live subscription.
  * On client-side navigation, convexLoad creates a live subscription directly.
+ *
+ * Subscriptions created here are route-scoped: they are released once the current
+ * route no longer uses them (see query-lifecycle.ts).
  */
 import type { FunctionReference, FunctionArgs } from 'convex/server';
 import { getFunctionName, makeFunctionReference } from 'convex/server';
@@ -38,8 +41,12 @@ export class ConvexLoadResult<T = unknown> {
 	constructor(
 		public readonly refName: string,
 		public readonly args: Record<string, unknown>,
-		public readonly data: T
+		public readonly data: T,
+		public readonly keepAlive = true
 	) {}
+
+	/** No-op on the server — the live subscription only exists after client hydration. */
+	dispose(): void {}
 }
 
 /**
@@ -63,28 +70,34 @@ export class ConvexLoadResult<T = unknown> {
  *
  * @param ref - A query FunctionReference like `api.tasks.get`.
  * @param args - Arguments for the query.
- * @param options - Optional `{ token }` for authenticated server-side fetches.
+ * @param options - Optional `{ token }` for authenticated server-side fetches, and
+ * `{ keepAlive: false }` to unsubscribe as soon as the route no longer uses the query.
  */
 export async function convexLoad<Query extends FunctionReference<'query'>>(
 	ref: Query,
 	args: FunctionArgs<Query> | 'skip',
-	options?: { token?: string }
+	options?: { token?: string; keepAlive?: boolean }
 ): Promise<DetachedQueryResult<Query>> {
 	if (args === 'skip') {
 		return {
 			data: undefined,
 			isLoading: false,
 			error: undefined,
-			isStale: false
+			isStale: false,
+			dispose: () => {}
 		} as DetachedQueryResult<Query>;
 	}
+	const keepAlive = options?.keepAlive ?? true;
 
 	if (IS_BROWSER) {
 		// Client-side navigation: use the authenticated singleton ConvexClient
 		// for the initial fetch, then create a live subscription.
 		const client = getConvexClient();
 		const initialData = await client.query(ref, args);
-		return createDetachedQuery(ref, args, initialData) as DetachedQueryResult<Query>;
+		return createDetachedQuery(ref, args, initialData, {
+			scope: 'route',
+			keepAlive
+		}) as DetachedQueryResult<Query>;
 	}
 
 	// Server-side: HTTP fetch, wrap in ConvexLoadResult for transport.
@@ -99,7 +112,8 @@ export async function convexLoad<Query extends FunctionReference<'query'>>(
 	return new ConvexLoadResult(
 		name,
 		args as Record<string, unknown>,
-		data
+		data,
+		keepAlive
 	) as unknown as DetachedQueryResult<Query>;
 }
 
@@ -122,13 +136,13 @@ export async function convexLoad<Query extends FunctionReference<'query'>>(
  */
 export function encodeConvexLoad(
 	value: unknown
-): false | { refName: string; args: Record<string, unknown>; data: unknown } {
+): false | { refName: string; args: Record<string, unknown>; data: unknown; keepAlive: boolean } {
 	if (
 		value instanceof ConvexLoadResult ||
 		(value != null && typeof value === 'object' && '__convexLoad' in value)
 	) {
 		const v = value as ConvexLoadResult;
-		return { refName: v.refName, args: v.args, data: v.data };
+		return { refName: v.refName, args: v.args, data: v.data, keepAlive: v.keepAlive };
 	}
 	return false;
 }
@@ -141,9 +155,13 @@ export function decodeConvexLoad(encoded: {
 	refName: string;
 	args: Record<string, unknown>;
 	data: unknown;
+	keepAlive?: boolean;
 }): DetachedQueryResult<FunctionReference<'query'>> {
 	const ref = makeFunctionReference<'query'>(encoded.refName);
-	return createDetachedQuery(ref, encoded.args, encoded.data);
+	return createDetachedQuery(ref, encoded.args, encoded.data, {
+		scope: 'route',
+		keepAlive: encoded.keepAlive ?? true
+	});
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -168,7 +186,8 @@ export class ConvexLoadPaginatedResult<T = unknown> {
 		public readonly refName: string,
 		public readonly args: Record<string, unknown>,
 		public readonly initialNumItems: number,
-		public readonly data: PaginatedReturnType<T>
+		public readonly data: PaginatedReturnType<T>,
+		public readonly keepAlive = true
 	) {}
 
 	/** Convenience: the first page of results. */
@@ -185,6 +204,9 @@ export class ConvexLoadPaginatedResult<T = unknown> {
 	loadMore(): boolean {
 		return false;
 	}
+
+	/** No-op on the server — the live subscription only exists after client hydration. */
+	dispose(): void {}
 }
 
 /**
@@ -210,12 +232,13 @@ export class ConvexLoadPaginatedResult<T = unknown> {
  *
  * @param ref - A FunctionReference to a paginated query.
  * @param args - Query arguments (without `paginationOpts` — managed automatically).
- * @param options - `{ initialNumItems }` (required), optional `{ token }` for auth.
+ * @param options - `{ initialNumItems }` (required), optional `{ token }` for auth, and
+ * `{ keepAlive: false }` to unsubscribe as soon as the route no longer uses the query.
  */
 export async function convexLoadPaginated<Query extends FunctionReference<'query'>>(
 	ref: Query,
 	args: WithoutPaginationOpts<FunctionArgs<Query>> | 'skip',
-	options: { initialNumItems: number; token?: string }
+	options: { initialNumItems: number; token?: string; keepAlive?: boolean }
 ): Promise<DetachedPaginatedQueryResult<Query>> {
 	if (args === 'skip') {
 		return {
@@ -223,9 +246,11 @@ export async function convexLoadPaginated<Query extends FunctionReference<'query
 			status: 'Exhausted',
 			isLoading: false,
 			error: undefined,
-			loadMore: () => false
+			loadMore: () => false,
+			dispose: () => {}
 		} as DetachedPaginatedQueryResult<Query>;
 	}
+	const keepAlive = options.keepAlive ?? true;
 
 	// Fetch the first page
 	const fullArgs = {
@@ -239,7 +264,9 @@ export async function convexLoadPaginated<Query extends FunctionReference<'query
 		const data = (await client.query(ref, fullArgs)) as PaginatedReturnType<PageItem<Query>>;
 		return createDetachedPaginatedQuery(ref, args, {
 			initialNumItems: options.initialNumItems,
-			initialData: data
+			initialData: data,
+			scope: 'route',
+			keepAlive
 		});
 	}
 
@@ -255,7 +282,8 @@ export async function convexLoadPaginated<Query extends FunctionReference<'query
 		name,
 		args as Record<string, unknown>,
 		options.initialNumItems,
-		data
+		data,
+		keepAlive
 	) as unknown as DetachedPaginatedQueryResult<Query>;
 }
 
@@ -284,6 +312,7 @@ export function encodeConvexLoadPaginated(value: unknown):
 			args: Record<string, unknown>;
 			initialNumItems: number;
 			data: unknown;
+			keepAlive: boolean;
 	  } {
 	if (
 		value instanceof ConvexLoadPaginatedResult ||
@@ -294,7 +323,8 @@ export function encodeConvexLoadPaginated(value: unknown):
 			refName: v.refName,
 			args: v.args,
 			initialNumItems: v.initialNumItems,
-			data: v.data
+			data: v.data,
+			keepAlive: v.keepAlive
 		};
 	}
 	return false;
@@ -309,10 +339,13 @@ export function decodeConvexLoadPaginated(encoded: {
 	args: Record<string, unknown>;
 	initialNumItems: number;
 	data: unknown;
+	keepAlive?: boolean;
 }): DetachedPaginatedQueryResult<FunctionReference<'query'>> {
 	const ref = makeFunctionReference<'query'>(encoded.refName);
 	return createDetachedPaginatedQuery(ref, encoded.args, {
 		initialNumItems: encoded.initialNumItems,
-		initialData: encoded.data as PaginatedReturnType<unknown>
+		initialData: encoded.data as PaginatedReturnType<unknown>,
+		scope: 'route',
+		keepAlive: encoded.keepAlive ?? true
 	});
 }
