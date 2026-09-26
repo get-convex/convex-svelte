@@ -128,6 +128,14 @@ export function findTag(html: string, tag: string): number {
 			i = lower.indexOf('<', end + 3);
 			continue;
 		}
+		if (lower[i + 1] === '!' || lower[i + 1] === '?') {
+			// Doctype, `<?…>`, `<![CDATA[…>`: the HTML parser reads these up to the
+			// next `>` (as the doctype or a "bogus comment").
+			const end = lower.indexOf('>', i + 2);
+			if (end === -1) return -1;
+			i = lower.indexOf('<', end + 1);
+			continue;
+		}
 		if (lower.startsWith(tag, i) && isTagBoundary(lower[i + tag.length])) return i;
 
 		const name = /^<\/?([a-z][^\s/>]*)/.exec(lower.slice(i, i + 32))?.[1];
