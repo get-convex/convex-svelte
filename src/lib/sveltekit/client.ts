@@ -25,7 +25,9 @@ export type InitConvexOptions = ConvexClientOptions & {
 /**
  * Initialize the Convex client at module level (before any component mounts).
  * Call from `hooks.client.ts` to ensure the client exists before `transport.decode`.
- * Idempotent — subsequent calls with the same URL are no-ops.
+ * Idempotent — subsequent calls with the same URL return the existing client.
+ * A `keepAlive` option is still applied, so editing it in `hooks.ts` takes
+ * effect on HMR.
  *
  * @param url - Your Convex deployment URL (e.g. `PUBLIC_CONVEX_URL`).
  * @param options - Optional `ConvexClientOptions`, plus `keepAlive` for `convexLoad()` queries.
@@ -36,19 +38,20 @@ export function initConvex(url: string, options: InitConvexOptions = {}): Convex
 		throw new Error('initConvex requires a non-empty URL string');
 	}
 	const { keepAlive, ...clientOptions } = options;
+	const existing = getSingletonClient();
+	// Only one deployment per app is supported — fail loudly instead of
+	// silently handing back a client for a different URL.
+	if (existing && getSingletonUrl() !== url) {
+		throw new Error(
+			`initConvex() was called with ${url}, but the Convex client is already initialized for ${getSingletonUrl()}. ` +
+				'Only one deployment per app is supported. Call closeConvex() first to switch deployments.'
+		);
+	}
+	// Applied only after validation, so a rejected call has no side effects.
 	if (keepAlive !== undefined) {
 		configureKeepAlive(keepAlive);
 	}
-	const existing = getSingletonClient();
 	if (existing) {
-		// Only one deployment per app is supported — fail loudly instead of
-		// silently handing back a client for a different URL.
-		if (getSingletonUrl() !== url) {
-			throw new Error(
-				`initConvex() was called with ${url}, but the Convex client is already initialized for ${getSingletonUrl()}. ` +
-					'Only one deployment per app is supported. Call closeConvex() first to switch deployments.'
-			);
-		}
 		return existing;
 	}
 	const client = new ConvexClient(url, { disabled: !IS_BROWSER, ...clientOptions });

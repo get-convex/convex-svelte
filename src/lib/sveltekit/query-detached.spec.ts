@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { FunctionReference } from 'convex/server';
+import { makeFunctionReference } from 'convex/server';
 
 // ---------------------------------------------------------------------------
 // Tests for createDetachedQuery / createDetachedPaginatedQuery subscription
@@ -27,7 +27,8 @@ const { client, deferred, flush } = vi.hoisted(() => {
 
 vi.mock('../internal/singleton.js', () => ({
 	getConvexClient: () => client,
-	deferSubscription: (fn: () => void) => deferred.push(fn)
+	deferSubscription: (fn: () => void) => deferred.push(fn),
+	onCloseConvex: () => {}
 }));
 
 // The real module needs SvelteKit's `$app/state`; reader tracking is a no-op here.
@@ -36,9 +37,10 @@ vi.mock('./route-data.svelte.js', async () => {
 	return {
 		createRouteQuery: (
 			handle: ConstructorParameters<typeof RouteQuery>[0],
-			keepAlive: boolean
+			keepAlive: boolean,
+			key: string
 		) => ({
-			query: new RouteQuery(handle, keepAlive),
+			query: new RouteQuery(handle, keepAlive, key),
 			track: () => {}
 		})
 	};
@@ -52,11 +54,12 @@ import {
 	reconcileRouteQueries
 } from './query-lifecycle.js';
 
-const ref = { _name: 'messages:list' } as unknown as FunctionReference<'query'>;
+const ref = makeFunctionReference<'query'>('messages:list');
 
 beforeEach(() => {
 	vi.clearAllMocks();
 	deferred.length = 0;
+	client.disabled = false;
 	client.onUpdate.mockReturnValue(client.unsubscribe);
 	client.onPaginatedUpdate_experimental.mockReturnValue(
 		Object.assign(client.unsubscribe, { getCurrentValue: () => undefined })
@@ -200,5 +203,115 @@ describe('createDetachedPaginatedQuery', () => {
 		reconcileRouteQueries({});
 
 		expect(client.unsubscribe).toHaveBeenCalledOnce();
+	});
+});
+
+describe('inactive (SSR / closed) clients', () => {
+	it('createDetachedQuery does not queue a deferred subscription', () => {
+		client.disabled = true;
+
+		const manual = createDetachedQuery(ref, {}, []);
+		const route = createDetachedQuery(ref, {}, [], { scope: 'route' });
+
+		// The server never flushes the queue, so queued callbacks would leak.
+		expect(deferred).toHaveLength(0);
+		expect(manual.data).toEqual([]);
+		expect(route.data).toEqual([]);
+	});
+
+	it('createDetachedPaginatedQuery does not queue a deferred subscription', () => {
+		client.disabled = true;
+
+		createDetachedPaginatedQuery(ref, {}, { initialNumItems: 10 });
+		createDetachedPaginatedQuery(ref, {}, { initialNumItems: 10, scope: 'route' });
+
+		expect(deferred).toHaveLength(0);
+	});
+});
+
+describe('createDetachedPaginatedQuery — loadMore after release', () => {
+	/** Deliver a first page so the result's loadMore is wired to the subscription. */
+	function deliverPage(subscriptionLoadMore: (numItems: number) => boolean) {
+		const subscription = Object.assign(vi.fn(), {
+			getCurrentValue: () => ({
+				results: [{ id: 1 }],
+				status: 'CanLoadMore' as const,
+				loadMore: subscriptionLoadMore
+			})
+		});
+		client.onPaginatedUpdate_experimental.mockReturnValueOnce(subscription);
+		flush();
+	}
+
+	it('forwards loadMore while subscribed', () => {
+		const subscriptionLoadMore = vi.fn(() => true);
+		const result = createDetachedPaginatedQuery(ref, {}, { initialNumItems: 10 });
+		deliverPage(subscriptionLoadMore);
+
+		expect(result.loadMore(10)).toBe(true);
+		expect(subscriptionLoadMore).toHaveBeenCalledWith(10);
+	});
+
+	it('returns false and does not touch the closed subscription after dispose()', () => {
+		// Convex identifies paginated queries by args: calling the old loadMore
+		// would throw or load pages into a newer subscription with the same args.
+		const subscriptionLoadMore = vi.fn(() => true);
+		const result = createDetachedPaginatedQuery(ref, {}, { initialNumItems: 10 });
+		deliverPage(subscriptionLoadMore);
+
+		result.dispose();
+
+		expect(result.loadMore(10)).toBe(false);
+		expect(subscriptionLoadMore).not.toHaveBeenCalled();
+		expect(result.status).toBe('CanLoadMore');
+	});
+
+	it('queues loadMore while released and sends it to the new subscription', () => {
+		configureKeepAlive(false);
+		const oldLoadMore = vi.fn(() => true);
+		const newLoadMore = vi.fn(() => true);
+		const result = createDetachedPaginatedQuery(ref, {}, { initialNumItems: 10, scope: 'route' });
+		deliverPage(oldLoadMore);
+		reconcileRouteQueries({ messages: result });
+		reconcileRouteQueries({});
+
+		result.loadMore(10);
+		reconcileRouteQueries({ messages: result });
+		deliverPage(newLoadMore);
+
+		expect(oldLoadMore).not.toHaveBeenCalled();
+		expect(newLoadMore).toHaveBeenCalledWith(10);
+	});
+});
+
+describe('route scope — idle duplicates', () => {
+	it('replaces an idle query with the same args instead of keeping both', () => {
+		const first = createDetachedQuery(ref, { muteWords: ['a'] }, [], { scope: 'route' });
+		flush();
+		reconcileRouteQueries({ messages: first });
+		reconcileRouteQueries({});
+		const firstUnsubscribe = client.unsubscribe;
+		const secondUnsubscribe = vi.fn();
+		client.onUpdate.mockReturnValueOnce(secondUnsubscribe);
+
+		// Revisit: the load creates a new result for the same query and args.
+		createDetachedQuery(ref, { muteWords: ['a'] }, [], { scope: 'route' });
+		flush();
+
+		expect(client.onUpdate).toHaveBeenCalledTimes(2);
+		expect(firstUnsubscribe).toHaveBeenCalledOnce();
+		expect(secondUnsubscribe).not.toHaveBeenCalled();
+	});
+
+	it('keeps idle queries with different args', () => {
+		const first = createDetachedQuery(ref, { muteWords: ['a'] }, [], { scope: 'route' });
+		flush();
+		reconcileRouteQueries({ messages: first });
+		reconcileRouteQueries({});
+
+		createDetachedQuery(ref, { muteWords: ['b'] }, [], { scope: 'route' });
+		flush();
+
+		expect(client.unsubscribe).not.toHaveBeenCalled();
 	});
 });

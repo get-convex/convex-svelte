@@ -80,6 +80,27 @@ test.describe('convexLoad — route-scoped subscriptions', () => {
 		expect(subscriptions.isSubscribed('b')).toBe(true);
 	});
 
+	test('keeps a query that is in page.data but no longer rendered', async ({ page }) => {
+		// With keepAlive disabled, only page.data can keep the query subscribed
+		// once no component reads it anymore.
+		const subscriptions = trackSubscriptions(page);
+		await openPage(page, '/tests/convex-load-release/a?keepAlive=false');
+		await expect.poll(() => subscriptions.isSubscribed('a')).toBe(true);
+		await page.waitForTimeout(1000);
+		const mark = subscriptions.mark();
+
+		await page.getByTestId('toggle-data').click();
+		await expect(page.getByTestId('data')).not.toBeVisible();
+		await page.waitForTimeout(1000);
+
+		expect(subscriptions.eventsSince(mark, 'a')).toEqual([]);
+
+		// Leaving the route still releases it.
+		await page.getByTestId('nav-link').click();
+		await expect(page.getByTestId('page-name')).toContainText('page: b', { timeout: 10000 });
+		await expect.poll(() => subscriptions.isSubscribed('a')).toBe(false);
+	});
+
 	test('keeps the query alive in the idle buffer and reuses it on back navigation', async ({
 		page
 	}) => {

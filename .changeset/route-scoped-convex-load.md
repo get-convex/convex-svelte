@@ -8,9 +8,9 @@
 
 ### Features
 
-- **Idle buffer for released queries** - released queries stay subscribed in a small LRU buffer so back navigation and revisits stay instant. Configure it via `initConvex(url, { keepAlive: { maxQueries, maxIdleMs } })` (default `{ maxQueries: 10, maxIdleMs: 60_000 }`), or pass `keepAlive: false` to unsubscribe immediately.
+- **Idle buffer for released queries** - released queries stay subscribed in a small LRU buffer, so revisiting a page reuses the live subscription instead of subscribing again. A revisit replaces its idle copy instead of taking another slot. Configure it via `initConvex(url, { keepAlive: { maxQueries, maxIdleMs } })` (default `{ maxQueries: 10, maxIdleMs: 60_000 }`), or pass `keepAlive: false` to unsubscribe immediately. `closeConvex()` disposes all of these queries.
 - **Per-query `keepAlive`** - `convexLoad(query, args, { keepAlive: false })` and `convexLoadPaginated(query, args, { initialNumItems, keepAlive: false })` skip the idle buffer for that query.
-- **`dispose()`** - results of `convexLoad`, `convexLoadPaginated`, `createDetachedQuery`, and `createDetachedPaginatedQuery` expose `dispose()` to stop the subscription explicitly. `createDetachedQuery` / `createDetachedPaginatedQuery` accept `{ scope: 'route' }` to opt into route-scoped release.
+- **`dispose()`** - results of `convexLoad`, `convexLoadPaginated`, `createDetachedQuery`, and `createDetachedPaginatedQuery` expose `dispose()` to stop the subscription explicitly. After `dispose()`, `loadMore()` returns `false`. `createDetachedQuery` / `createDetachedPaginatedQuery` accept `{ scope: 'route' }` to opt into route-scoped release.
 - **`isStale` on `convexLoad` results** - now `true` while a released query shows its last known data.
 
 ### Improvements

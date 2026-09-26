@@ -32,15 +32,17 @@ function watchRouteData(): void {
  *
  * @param handle - Opens/closes the underlying Convex subscription.
  * @param keepAlive - Whether the query may use the idle buffer after release.
+ * @param key - Identifies the query and its args (see `RouteQuery`).
  * @returns The lifecycle and a `track` function to call from every getter of
  * the query result, so reading effects keep the query subscribed.
  */
 export function createRouteQuery(
 	handle: SubscriptionHandle,
-	keepAlive: boolean
+	keepAlive: boolean,
+	key: string
 ): { query: RouteQuery; track: () => void } {
 	watchRouteData();
-	const query = new RouteQuery(handle, keepAlive);
+	const query = new RouteQuery(handle, keepAlive, key);
 	const track = createSubscriber(() => {
 		query.retainReader();
 		return () => query.releaseReader();

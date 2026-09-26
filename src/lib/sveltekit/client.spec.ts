@@ -79,6 +79,21 @@ describe('initConvex — keepAlive', () => {
 		expect(releaseRouteQuery().close).toHaveBeenCalledOnce();
 	});
 
+	it('a rejected call (different URL) does not change keepAlive', () => {
+		initConvex('https://a.convex.cloud');
+
+		expect(() => initConvex('https://b.convex.cloud', { keepAlive: false })).toThrow();
+		expect(releaseRouteQuery().close).not.toHaveBeenCalled();
+	});
+
+	it('a repeated call with the same URL applies keepAlive (HMR)', () => {
+		const first = initConvex('https://example.convex.cloud');
+		const second = initConvex('https://example.convex.cloud', { keepAlive: false });
+
+		expect(second).toBe(first);
+		expect(releaseRouteQuery().close).toHaveBeenCalledOnce();
+	});
+
 	it('does not pass keepAlive on to the ConvexClient', () => {
 		initConvex('https://example.convex.cloud', {
 			keepAlive: { maxQueries: 3 },

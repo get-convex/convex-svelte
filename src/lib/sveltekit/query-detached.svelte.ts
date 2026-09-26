@@ -7,8 +7,11 @@
  * queries live until `dispose()` is called or the ConvexClient is closed.
  */
 import type { FunctionReference, FunctionReturnType, FunctionArgs } from 'convex/server';
+import { getFunctionName } from 'convex/server';
+import type { Value } from 'convex/values';
 import { getConvexClient, deferSubscription } from '../internal/singleton.js';
 import { isClientActive } from '../internal/client_status.js';
+import { serializeArgsKey } from '../shared/paginated_query_state.js';
 import { markRouteQuery, type SubscriptionHandle } from './query-lifecycle.js';
 import { createRouteQuery } from './route-data.svelte.js';
 
@@ -64,6 +67,9 @@ export function createDetachedQuery<Query extends FunctionReference<'query'>>(
 
 	const handle: SubscriptionHandle = {
 		open() {
+			// Disabled (SSR) or closed clients never subscribe. Checked before
+			// queueing: the server never flushes the deferred queue.
+			if (!isClientActive(client)) return;
 			wanted = true;
 			// Defer subscription until setupAuth (or setupConvex for no-auth apps)
 			// calls flushDeferredSubscriptions(). This prevents auth gap: transport.decode
@@ -116,7 +122,8 @@ export function createDetachedQuery<Query extends FunctionReference<'query'>>(
 		dispose
 	});
 
-	if (options.scope !== 'route') {
+	// Inactive clients never subscribe, so they need no route lifecycle (or its timers).
+	if (options.scope !== 'route' || !isClientActive(client)) {
 		handle.open();
 		return createResult(
 			() => {},
@@ -124,7 +131,8 @@ export function createDetachedQuery<Query extends FunctionReference<'query'>>(
 		);
 	}
 
-	const route = createRouteQuery(handle, options.keepAlive ?? true);
+	const key = `${getFunctionName(query)}|${serializeArgsKey(args as Record<string, Value>)}`;
+	const route = createRouteQuery(handle, options.keepAlive ?? true, key);
 	return markRouteQuery(
 		createResult(route.track, () => route.query.dispose()),
 		route.query

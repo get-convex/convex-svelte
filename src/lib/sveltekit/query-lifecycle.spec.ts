@@ -9,6 +9,7 @@ import {
 	markRouteQuery,
 	reconcileRouteQueries
 } from './query-lifecycle.js';
+import { closeConvex } from '../internal/singleton.js';
 
 // ---------------------------------------------------------------------------
 // Tests for the route-scoped query lifecycle used by convexLoad /
@@ -38,9 +39,9 @@ function createHandle() {
 }
 
 /** A route-scoped query plus the load-result object that references it. */
-function createQuery(keepAlive = true) {
+function createQuery(keepAlive = true, key?: string) {
 	const handle = createHandle();
-	const query = new RouteQuery(handle, keepAlive);
+	const query = new RouteQuery(handle, keepAlive, key);
 	const result = markRouteQuery({ data: undefined }, query);
 	return { handle, query, result };
 }
@@ -396,5 +397,69 @@ describe('collectRouteQueries', () => {
 		expect(collectRouteQueries(undefined).size).toBe(0);
 		expect(collectRouteQueries('text').size).toBe(0);
 		expect(collectRouteQueries({ n: 1, s: 'x', nil: null }).size).toBe(0);
+	});
+});
+
+describe('RouteQuery — idle duplicates (same key)', () => {
+	it('closes an idle query when a new one with the same key is created', () => {
+		const first = createQuery(true, 'messages:list|{}');
+		reconcileRouteQueries({ doc: first.result });
+		reconcileRouteQueries({});
+
+		const second = createQuery(true, 'messages:list|{}');
+
+		expect(first.query.phase).toBe('closed');
+		expect(second.handle.isOpen).toBe(true);
+		// The new subscription opens before the duplicate closes, so the
+		// Convex client keeps the shared server subscription.
+		expect(second.handle.open.mock.invocationCallOrder[0]).toBeLessThan(
+			first.handle.close.mock.invocationCallOrder[0]
+		);
+	});
+
+	it('does not close active queries with the same key', () => {
+		const first = createQuery(true, 'messages:list|{}');
+		reconcileRouteQueries({ doc: first.result });
+
+		createQuery(true, 'messages:list|{}');
+
+		expect(first.query.phase).toBe('active');
+	});
+
+	it('keeps idle queries with a different key', () => {
+		const first = createQuery(true, 'messages:list|{"a":1}');
+		reconcileRouteQueries({ doc: first.result });
+		reconcileRouteQueries({});
+
+		createQuery(true, 'messages:list|{"a":2}');
+
+		expect(first.query.phase).toBe('idle');
+	});
+});
+
+describe('closeConvex()', () => {
+	it('disposes every open query and cancels its timers', async () => {
+		configureKeepAlive({ maxIdleMs: Infinity });
+		const idle = createQuery();
+		reconcileRouteQueries({ doc: idle.result });
+		reconcileRouteQueries({});
+		const unclaimed = createQuery();
+
+		await closeConvex();
+
+		expect(idle.query.phase).toBe('disposed');
+		expect(unclaimed.query.phase).toBe('disposed');
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	it('does not reopen disposed queries that are still in page.data', async () => {
+		const { handle, query, result } = createQuery();
+		reconcileRouteQueries({ doc: result });
+
+		await closeConvex();
+		reconcileRouteQueries({ doc: result });
+
+		expect(query.phase).toBe('disposed');
+		expect(handle.opens).toBe(1);
 	});
 });

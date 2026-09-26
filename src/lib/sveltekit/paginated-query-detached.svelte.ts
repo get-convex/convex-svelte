@@ -11,6 +11,7 @@
  */
 import type { PaginationStatus } from 'convex/browser';
 import type { FunctionReference, FunctionArgs } from 'convex/server';
+import { getFunctionName } from 'convex/server';
 import type { Value } from 'convex/values';
 import { getConvexClient, deferSubscription } from '../internal/singleton.js';
 import { isClientActive } from '../internal/client_status.js';
@@ -85,15 +86,25 @@ export function createDetachedPaginatedQuery<Query extends FunctionReference<'qu
 
 	let unsubscribe: (() => void) | undefined;
 	let wanted = false;
+	// Incremented on every close. Convex identifies a paginated query by its
+	// args, so a loadMore callback from a closed subscription would otherwise
+	// throw or load pages into a newer subscription with the same args.
+	let generation = 0;
 
 	const handle: SubscriptionHandle = {
 		open() {
+			// Disabled (SSR) or closed clients never subscribe. Checked before
+			// queueing: the server never flushes the deferred queue.
+			if (!isClientActive(client)) return;
 			wanted = true;
 			// Defer subscription until setupAuth (or setupConvex for no-auth apps)
 			// calls flushDeferredSubscriptions(). See query-detached.svelte.ts.
 			deferSubscription(() => {
 				// Skip if closed again before the deferred subscribe ran, or already open.
 				if (!wanted || unsubscribe || !isClientActive(client)) return;
+				const subscriptionGeneration = generation;
+				const loadMoreWhileOpen = (loadMore: (numItems: number) => boolean) => (numItems: number) =>
+					subscriptionGeneration === generation && loadMore(numItems);
 
 				// Create subscription
 				const subscription = client.onPaginatedUpdate_experimental(
@@ -106,7 +117,7 @@ export function createDetachedPaginatedQuery<Query extends FunctionReference<'qu
 						machine.onUpdate({
 							results: current.results as PageItem<Query>[],
 							status: current.status,
-							loadMore: (numItems: number) => current.loadMore(numItems)
+							loadMore: loadMoreWhileOpen(current.loadMore)
 						});
 					},
 					(e: Error) => {
@@ -121,13 +132,14 @@ export function createDetachedPaginatedQuery<Query extends FunctionReference<'qu
 					machine.onUpdate({
 						results: current.results as PageItem<Query>[],
 						status: current.status,
-						loadMore: (numItems: number) => current.loadMore(numItems)
+						loadMore: loadMoreWhileOpen(current.loadMore)
 					});
 				}
 			});
 		},
 		close() {
 			wanted = false;
+			generation += 1;
 			unsubscribe?.();
 			unsubscribe = undefined;
 		}
@@ -139,6 +151,7 @@ export function createDetachedPaginatedQuery<Query extends FunctionReference<'qu
 		machine.onArgsChange(argsKey);
 	}
 
+	let disposed = false;
 	const createResult = (
 		track: () => void,
 		dispose: () => void
@@ -160,12 +173,18 @@ export function createDetachedPaginatedQuery<Query extends FunctionReference<'qu
 			return error;
 		},
 		loadMore(numItems: number) {
-			return loadMoreFn(numItems);
+			// While merely released, the machine queues the request for the
+			// next subscription. A disposed query has none — never queue.
+			return !disposed && loadMoreFn(numItems);
 		},
-		dispose
+		dispose() {
+			disposed = true;
+			dispose();
+		}
 	});
 
-	if (options.scope !== 'route') {
+	// Inactive clients never subscribe, so they need no route lifecycle (or its timers).
+	if (options.scope !== 'route' || !isClientActive(client)) {
 		handle.open();
 		return createResult(
 			() => {},
@@ -173,7 +192,8 @@ export function createDetachedPaginatedQuery<Query extends FunctionReference<'qu
 		);
 	}
 
-	const route = createRouteQuery(handle, options.keepAlive ?? true);
+	const key = `paginated|${getFunctionName(query)}|${serializeArgsKey(args as Record<string, Value>)}|${options.initialNumItems}`;
+	const route = createRouteQuery(handle, options.keepAlive ?? true, key);
 	return markRouteQuery(
 		createResult(route.track, () => route.query.dispose()),
 		route.query

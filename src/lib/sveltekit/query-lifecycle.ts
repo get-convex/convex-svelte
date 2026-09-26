@@ -12,6 +12,7 @@
  * SvelteKit glue (`page.data` watcher, reader tracking) lives in
  * `route-data.svelte.ts`.
  */
+import { onCloseConvex } from '../internal/singleton.js';
 
 /** Options for the idle buffer of queries created by `convexLoad()` / `convexLoadPaginated()`. */
 export type KeepAliveOptions = {
@@ -56,6 +57,15 @@ const idleQueries = new Map<RouteQuery, () => void>();
 /** Queries reachable from `page.data` at the last reconcile. */
 let queriesInRoute = new Set<RouteQuery>();
 
+/** Queries whose subscription is currently open. */
+const openQueries = new Set<RouteQuery>();
+
+// The queries are bound to the client being closed and can never update
+// again, so dispose them — this also cancels their timers.
+onCloseConvex(() => {
+	for (const query of [...openQueries]) query.dispose();
+});
+
 /**
  * Configure the idle buffer. `false` disables it: queries are unsubscribed as
  * soon as they are no longer used by the current route.
@@ -92,6 +102,7 @@ export class RouteQuery {
 	#timer: ReturnType<typeof setTimeout> | undefined;
 	readonly #handle: SubscriptionHandle;
 	readonly #keepAlive: boolean;
+	readonly #key: string | undefined;
 
 	/**
 	 * Opens the subscription immediately, so data starts flowing while the
@@ -99,12 +110,22 @@ export class RouteQuery {
 	 *
 	 * @param handle - Opens/closes the underlying subscription.
 	 * @param keepAlive - Whether this query may use the idle buffer.
+	 * @param key - Identifies the query and its args. Idle queries with the
+	 * same key are replaced by this one instead of occupying buffer slots.
 	 */
-	constructor(handle: SubscriptionHandle, keepAlive = true) {
+	constructor(handle: SubscriptionHandle, keepAlive = true, key?: string) {
 		this.#handle = handle;
 		this.#keepAlive = keepAlive;
-		handle.open();
+		this.#key = key;
+		this.#open();
 		this.#startTimer(UNCLAIMED_TIMEOUT_MS, () => this.#release());
+		// Close idle duplicates after opening, so the Convex client keeps the
+		// shared subscription instead of removing and re-adding it.
+		if (key !== undefined) {
+			for (const [query, close] of idleQueries) {
+				if (query.#key === key) close();
+			}
+		}
 	}
 
 	/** Current lifecycle phase. Exposed for tests and debugging. */
@@ -145,7 +166,7 @@ export class RouteQuery {
 		if (this.#phase === 'disposed') return;
 		this.#clearTimer();
 		idleQueries.delete(this);
-		if (this.#phase === 'closed') this.#handle.open();
+		if (this.#phase === 'closed') this.#open();
 		this.#phase = 'active';
 	}
 
@@ -172,7 +193,13 @@ export class RouteQuery {
 		queriesInRoute.delete(this);
 		this.#inRoute = false;
 		this.#phase = 'closed';
+		openQueries.delete(this);
 		this.#handle.close();
+	}
+
+	#open(): void {
+		openQueries.add(this);
+		this.#handle.open();
 	}
 
 	#startTimer(ms: number, fn: () => void): void {
@@ -248,7 +275,7 @@ export function reconcileRouteQueries(data: unknown): void {
 
 /** Reset module state. Tests only. */
 export function _resetQueryLifecycle(): void {
-	for (const close of [...idleQueries.values()]) close();
+	for (const query of [...openQueries]) query.dispose();
 	queriesInRoute = new Set();
 	keepAliveConfig = { ...DEFAULT_KEEP_ALIVE };
 }
