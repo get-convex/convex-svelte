@@ -70,29 +70,79 @@ export function serializeHydrationPayload(collector: HydrationCollector): string
 }
 
 /** Elements whose content the HTML parser treats as text: tags inside don't count. */
-const rawTextElement = /^<(script|style|textarea|title|noscript|iframe|noembed|noframes|xmp)[\s>/]/;
+const rawTextElements = new Set([
+	'script',
+	'style',
+	'textarea',
+	'title',
+	'noscript',
+	'iframe',
+	'noembed',
+	'noframes',
+	'xmp'
+]);
+
+const isTagBoundary = (char: string | undefined) => char === undefined || /[\s/>]/.test(char);
+
+/** Index just past the `>` of the tag starting at `start`, skipping quoted attribute values. */
+function endOfTag(html: string, start: number): number {
+	for (let i = start + 1; i < html.length; i++) {
+		const char = html[i];
+		if (char === '>') return i + 1;
+		if (char !== '=') continue;
+		let valueStart = i + 1;
+		while (/\s/.test(html[valueStart] ?? '')) valueStart++;
+		const quote = html[valueStart];
+		if (quote === '"' || quote === "'") {
+			const close = html.indexOf(quote, valueStart + 1);
+			if (close === -1) return -1;
+			i = close;
+		}
+	}
+	return -1;
+}
+
+/** Index of the end tag `</name` closing a raw-text element, from `from` on. */
+function closingTagIndex(html: string, name: string, from: number): number {
+	for (let i = html.indexOf(`</${name}`, from); i !== -1; i = html.indexOf(`</${name}`, i + 1)) {
+		if (isTagBoundary(html[i + name.length + 2])) return i;
+	}
+	return -1;
+}
 
 /**
- * Index of the first real `tag` (e.g. `</head`) in `html`, skipping comments
- * and the content of raw-text elements such as `<script>` — `"</head>"` inside
- * a script string is not the end of the head. `-1` if there is none.
+ * Index of the first real `tag` (e.g. `</head` or `<body`) in `html`: skips
+ * comments, attribute values, and the content of raw-text elements such as
+ * `<script>` — `"</head>"` inside a script string is not the end of the head.
+ * `-1` if there is none.
  */
 export function findTag(html: string, tag: string): number {
-	const lower = html.toLowerCase();
-	for (let i = lower.indexOf('<'); i !== -1; i = lower.indexOf('<', i + 1)) {
+	// ASCII-only case folding keeps every index valid for `html` (unlike
+	// toLowerCase(), which can change the length, e.g. for "İ").
+	const lower = html.replace(/[A-Z]+/g, (match) => match.toLowerCase());
+	let i = lower.indexOf('<');
+	while (i !== -1) {
 		if (lower.startsWith('<!--', i)) {
 			const end = lower.indexOf('-->', i + 4);
 			if (end === -1) return -1;
-			i = end + 2;
+			i = lower.indexOf('<', end + 3);
 			continue;
 		}
-		if (lower.startsWith(tag, i) && /[\s>/]/.test(lower[i + tag.length] ?? '>')) return i;
-		const raw = rawTextElement.exec(lower.slice(i, i + 12));
-		if (raw) {
-			const end = lower.indexOf(`</${raw[1]}`, i + 1);
-			if (end === -1) return -1;
-			i = end;
+		if (lower.startsWith(tag, i) && isTagBoundary(lower[i + tag.length])) return i;
+
+		const name = /^<\/?([a-z][^\s/>]*)/.exec(lower.slice(i, i + 32))?.[1];
+		if (name === undefined) {
+			// A `<` that doesn't start a tag is text.
+			i = lower.indexOf('<', i + 1);
+			continue;
 		}
+		const tagEnd = endOfTag(lower, i);
+		if (tagEnd === -1) return -1;
+		if (lower[i + 1] !== '/' && rawTextElements.has(name)) {
+			i = closingTagIndex(lower, name, tagEnd);
+			continue;
+		}
+		i = lower.indexOf('<', tagEnd);
 	}
 	return -1;
 }
