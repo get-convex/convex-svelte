@@ -69,6 +69,34 @@ export function serializeHydrationPayload(collector: HydrationCollector): string
 	return `<script type="application/json" ${PAYLOAD_ATTRIBUTE}>${json}</script>`;
 }
 
+/** Elements whose content the HTML parser treats as text: tags inside don't count. */
+const rawTextElement = /^<(script|style|textarea|title|noscript|iframe|noembed|noframes|xmp)[\s>/]/;
+
+/**
+ * Index of the first real `tag` (e.g. `</head`) in `html`, skipping comments
+ * and the content of raw-text elements such as `<script>` — `"</head>"` inside
+ * a script string is not the end of the head. `-1` if there is none.
+ */
+export function findTag(html: string, tag: string): number {
+	const lower = html.toLowerCase();
+	for (let i = lower.indexOf('<'); i !== -1; i = lower.indexOf('<', i + 1)) {
+		if (lower.startsWith('<!--', i)) {
+			const end = lower.indexOf('-->', i + 4);
+			if (end === -1) return -1;
+			i = end + 2;
+			continue;
+		}
+		if (lower.startsWith(tag, i) && /[\s>/]/.test(lower[i + tag.length] ?? '>')) return i;
+		const raw = rawTextElement.exec(lower.slice(i, i + 12));
+		if (raw) {
+			const end = lower.indexOf(`</${raw[1]}`, i + 1);
+			if (end === -1) return -1;
+			i = end;
+		}
+	}
+	return -1;
+}
+
 /**
  * Server: insert the payload into the page HTML — in `<head>`, so the parser
  * has created it before SvelteKit's start script (in `<body>`) can run the
@@ -76,8 +104,8 @@ export function serializeHydrationPayload(collector: HydrationCollector): string
  */
 export function injectHydrationPayload(html: string, collector: HydrationCollector): string {
 	const script = serializeHydrationPayload(collector);
-	for (const tag of ['</head>', '<body']) {
-		const index = html.indexOf(tag);
+	for (const tag of ['</head', '<body']) {
+		const index = findTag(html, tag);
 		if (index !== -1) return html.slice(0, index) + script + html.slice(index);
 	}
 	return script + html;
@@ -126,8 +154,9 @@ export function warnHydrationMiss(functionName: string): void {
 	console.warn(
 		`[convex-svelte] ${functionName}: no server result to reuse during hydration, so it ` +
 			'queries Convex before setupAuth() authenticated the client. Await convexLoad() in ' +
-			'universal loads (streamed promises are not embedded) and pass the same args on the ' +
-			'server and in the browser, or pass { hydrate: false } to silence this.'
+			'universal loads (a streamed result is only embedded if it finished before the page ' +
+			'HTML was generated) and pass the same args on the server and in the browser, or ' +
+			'pass { hydrate: false } to silence this.'
 	);
 }
 

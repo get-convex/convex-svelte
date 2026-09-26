@@ -128,16 +128,47 @@ describe('injectHydrationPayload — server', () => {
 		);
 	});
 
-	it('uses the first </head> (the document head, not page content)', async () => {
+	it('does not insert into a head script that contains "</head>"', async () => {
 		const { hydration } = await loadModules();
 		const collector = collectorWith(hydration, { 'a|{}': 1 });
+		const script = '<script>window.example = "</head>";</script>';
 
 		const html = hydration.injectHydrationPayload(
-			'<head></head><body><pre></head></pre></body>',
+			`<html><head>${script}</head><body></body></html>`,
 			collector
 		);
 
-		expect(html.indexOf('data-convex-load')).toBeLessThan(html.indexOf('<body>'));
+		expect(html).toContain(script);
+		expect(html).toMatch(/<\/script><script [^>]*data-convex-load>.*<\/script><\/head><body>/);
+	});
+});
+
+describe('findTag — server', () => {
+	it.each([
+		['a script string', '<head><script>const s = "</head>";</script></head><body>'],
+		['a comment', '<head><!-- </head> --></head><body>'],
+		['a style element', '<head><style>/* </head> */</style></head><body>'],
+		['a title', '<head><title>&lt;/head> </head> demo</title></head><body>']
+	])('ignores </head> inside %s', async (_name, html) => {
+		const { hydration } = await loadModules();
+
+		expect(hydration.findTag(html, '</head')).toBe(html.lastIndexOf('</head>'));
+	});
+
+	it('is case-insensitive and requires a tag boundary', async () => {
+		const { hydration } = await loadModules();
+
+		expect(hydration.findTag('<HEAD></HEAD>', '</head')).toBe(6);
+		expect(hydration.findTag('<bodyguard><body>', '<body')).toBe(11);
+		expect(hydration.findTag('<script>"<body>"</script><body class="x">', '<body')).toBe(25);
+	});
+
+	it('returns -1 for missing tags and unterminated raw text', async () => {
+		const { hydration } = await loadModules();
+
+		expect(hydration.findTag('<p>x</p>', '</head')).toBe(-1);
+		expect(hydration.findTag('<script></head>', '</head')).toBe(-1);
+		expect(hydration.findTag('<!-- </head>', '</head')).toBe(-1);
 	});
 });
 

@@ -180,10 +180,20 @@ describe('convexLoadHydration', () => {
 });
 
 describe('convexLoadHydration — SvelteKit without the universal-load marker', () => {
-	it('embeds nothing (fail-safe) and warns once', async () => {
+	it.each([
+		['older than 2.31 exports (accessor missing)', { try_get_request_store: undefined }],
+		['2.31–2.55 (store without the marker)', { try_get_request_store: () => ({ state: {} }) }],
+		[
+			'a throwing accessor',
+			{
+				try_get_request_store: () => {
+					throw new Error('internal error');
+				}
+			}
+		]
+	])('embeds nothing (fail-safe) and warns once: %s', async (_name, internal) => {
 		vi.resetModules();
-		// A real module namespace yields `undefined` for a removed export.
-		vi.doMock('@sveltejs/kit/internal/server', () => ({ try_get_request_store: undefined }));
+		vi.doMock('@sveltejs/kit/internal/server', () => internal);
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const { convexLoadHydration: handle } = await import('./hydration-server.js');
 		const transport = await import('./transport.svelte.js');
@@ -203,7 +213,20 @@ describe('convexLoadHydration — SvelteKit without the universal-load marker', 
 
 		expect(payloadOf(html)).toEqual({});
 		expect(warn).toHaveBeenCalledOnce();
+		expect(warn.mock.calls[0][0]).toContain('SvelteKit 2.56');
 		warn.mockRestore();
 		vi.doUnmock('@sveltejs/kit/internal/server');
+	});
+
+	it('does not warn when the marker is present', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		mockHttpClientQuery.mockResolvedValueOnce([]);
+
+		await renderPage(async () => {
+			await convexLoad(listRef, {});
+		});
+
+		expect(warn).not.toHaveBeenCalled();
+		warn.mockRestore();
 	});
 });
