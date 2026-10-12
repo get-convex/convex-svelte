@@ -174,8 +174,9 @@ export function createDetachedPaginatedQuery<Query extends FunctionReference<'qu
 		},
 		loadMore(numItems: number) {
 			// While merely released, the machine queues the request for the
-			// next subscription. A disposed query has none — never queue.
-			return !disposed && loadMoreFn(numItems);
+			// next subscription. A disposed query (also via closeConvex()) or a
+			// closed client has none — never queue.
+			return !disposed && isClientActive(client) && loadMoreFn(numItems);
 		},
 		dispose() {
 			disposed = true;

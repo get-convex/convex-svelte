@@ -266,6 +266,21 @@ describe('createDetachedPaginatedQuery — loadMore after release', () => {
 		expect(result.status).toBe('CanLoadMore');
 	});
 
+	it('returns false without changing the status once the client is closed (closeConvex)', () => {
+		const subscriptionLoadMore = vi.fn(() => true);
+		const result = createDetachedPaginatedQuery(ref, {}, { initialNumItems: 10, scope: 'route' });
+		deliverPage(subscriptionLoadMore);
+
+		client.closed = true;
+		try {
+			expect(result.loadMore(10)).toBe(false);
+			expect(subscriptionLoadMore).not.toHaveBeenCalled();
+			expect(result.status).toBe('CanLoadMore');
+		} finally {
+			client.closed = false;
+		}
+	});
+
 	it('queues loadMore while released and sends it to the new subscription', () => {
 		configureQueryCache(false);
 		const oldLoadMore = vi.fn(() => true);
@@ -294,9 +309,11 @@ describe('route scope — idle duplicates', () => {
 		const secondUnsubscribe = vi.fn();
 		client.onUpdate.mockReturnValueOnce(secondUnsubscribe);
 
-		// Revisit: the load creates a new result for the same query and args.
-		createDetachedQuery(ref, { muteWords: ['a'] }, [], { scope: 'route' });
+		// Revisit: the load creates a new result for the same query and args,
+		// and the route claims it.
+		const second = createDetachedQuery(ref, { muteWords: ['a'] }, [], { scope: 'route' });
 		flush();
+		reconcileRouteQueries({ messages: second });
 
 		expect(client.onUpdate).toHaveBeenCalledTimes(2);
 		expect(firstUnsubscribe).toHaveBeenCalledOnce();

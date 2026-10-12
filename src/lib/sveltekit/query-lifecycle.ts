@@ -117,8 +117,9 @@ export class RouteQuery {
 	 *
 	 * @param handle - Opens/closes the underlying subscription.
 	 * @param keepAlive - Whether this query may use the idle buffer.
-	 * @param key - Identifies the query and its args. Idle queries with the
-	 * same key are replaced by this one instead of occupying buffer slots.
+	 * @param key - Identifies the query and its args. Once this query is
+	 * claimed, idle queries with the same key are replaced by it instead of
+	 * occupying buffer slots.
 	 */
 	constructor(handle: SubscriptionHandle, keepAlive = true, key?: string) {
 		this.#handle = handle;
@@ -126,13 +127,6 @@ export class RouteQuery {
 		this.#key = key;
 		this.#open();
 		this.#startTimer(UNCLAIMED_TIMEOUT_MS, () => this.#close());
-		// Close idle duplicates after opening, so the Convex client keeps the
-		// shared subscription instead of removing and re-adding it.
-		if (key !== undefined) {
-			for (const [query, close] of idleQueries) {
-				if (query.#key === key) close();
-			}
-		}
 	}
 
 	/** Current lifecycle phase. Exposed for tests and debugging. */
@@ -175,6 +169,21 @@ export class RouteQuery {
 		idleQueries.delete(this);
 		if (this.#phase === 'closed') this.#open();
 		this.#phase = 'active';
+		this.#replaceIdleDuplicates();
+	}
+
+	/**
+	 * Close idle copies of this query, now that it is in use. Only on claim: an
+	 * unclaimed duplicate (e.g. a hover preload that is never clicked) must not
+	 * evict the copy of a page the user visited. Runs after this query's
+	 * subscription is open, so the Convex client keeps the shared subscription
+	 * instead of removing and re-adding it.
+	 */
+	#replaceIdleDuplicates(): void {
+		if (this.#key === undefined) return;
+		for (const [query, close] of idleQueries) {
+			if (query.#key === this.#key) close();
+		}
 	}
 
 	/** No longer in use: move into the idle buffer, or close right away. */

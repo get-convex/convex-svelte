@@ -419,12 +419,14 @@ describe('collectRouteQueries', () => {
 });
 
 describe('RouteQuery — idle duplicates (same key)', () => {
-	it('closes an idle query when a new one with the same key is created', () => {
+	it('closes an idle query once a new one with the same key is claimed', () => {
 		const first = createQuery(true, 'messages:list|{}');
 		reconcileRouteQueries({ doc: first.result });
 		reconcileRouteQueries({});
 
 		const second = createQuery(true, 'messages:list|{}');
+		expect(first.query.phase).toBe('idle');
+		reconcileRouteQueries({ doc: second.result });
 
 		expect(first.query.phase).toBe('closed');
 		expect(second.handle.isOpen).toBe(true);
@@ -433,6 +435,19 @@ describe('RouteQuery — idle duplicates (same key)', () => {
 		expect(second.handle.open.mock.invocationCallOrder[0]).toBeLessThan(
 			first.handle.close.mock.invocationCallOrder[0]
 		);
+	});
+
+	it('never lets an unclaimed duplicate evict the idle copy (e.g. an unclicked preload)', () => {
+		const visited = createQuery(true, 'messages:list|{}');
+		reconcileRouteQueries({ doc: visited.result });
+		reconcileRouteQueries({});
+
+		const preload = createQuery(true, 'messages:list|{}');
+		vi.advanceTimersByTime(UNCLAIMED_TIMEOUT_MS);
+
+		expect(preload.query.phase).toBe('closed');
+		expect(visited.query.phase).toBe('idle');
+		expect(visited.handle.isOpen).toBe(true);
 	});
 
 	it('does not close active queries with the same key', () => {
