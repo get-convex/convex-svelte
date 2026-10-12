@@ -3,7 +3,7 @@
 
 // Client lifecycle (module singleton)
 export { initConvex, type InitConvexOptions } from './client.js';
-export type { KeepAliveOptions } from './query-lifecycle.js';
+export type { QueryCacheOptions } from './query-lifecycle.js';
 export { getConvexUrl, closeConvex, _getServerToken } from '../internal/singleton.js';
 
 // Server-side HTTP client

@@ -4,9 +4,14 @@
  * A route-scoped query stays subscribed while it is *in use*: reachable from
  * SvelteKit's `page.data` (all layouts + the current page) or read by at least
  * one effect. Once it is no longer in use it moves into a small idle buffer
- * (LRU, bounded by `maxQueries` and `maxIdleMs`) so back navigation and
+ * (LRU, bounded by `maxIdleEntries` and `expiration`) so back navigation and
  * revisits stay instant. Queries leaving the buffer are unsubscribed and
  * resubscribe automatically when they are used again.
+ *
+ * The option names match convex-helpers' `ConvexQueryCacheProvider`. Unlike
+ * it, a full buffer evicts the query that has been idle longest rather than
+ * the one that just became idle: the page you just left is the likeliest one
+ * to go back to.
  *
  * This module is framework-free so it can be unit tested. The Svelte and
  * SvelteKit glue (`page.data` watcher, reader tracking) lives in
@@ -15,33 +20,35 @@
 import { onCloseConvex } from '../internal/singleton.js';
 
 /** Options for the idle buffer of queries created by `convexLoad()` / `convexLoadPaginated()`. */
-export type KeepAliveOptions = {
+export type QueryCacheOptions = {
 	/**
 	 * Maximum number of idle queries kept subscribed. When exceeded, the query
 	 * that has been idle the longest is unsubscribed first. `0` unsubscribes
 	 * queries as soon as they are no longer used.
 	 * @default 10
 	 */
-	maxQueries?: number;
+	maxIdleEntries?: number;
 	/**
 	 * Maximum time in milliseconds an idle query stays subscribed.
-	 * `Infinity` keeps idle queries until they are pushed out by `maxQueries`.
+	 * `Infinity` keeps idle queries until they are pushed out by `maxIdleEntries`.
 	 * @default 60_000
 	 */
-	maxIdleMs?: number;
+	expiration?: number;
 };
 
-export const DEFAULT_KEEP_ALIVE: Required<KeepAliveOptions> = {
-	maxQueries: 10,
-	maxIdleMs: 60_000
+export const DEFAULT_QUERY_CACHE: Required<QueryCacheOptions> = {
+	maxIdleEntries: 10,
+	expiration: 60_000
 };
 
 /**
  * How long a query may exist without being claimed by the current route or a
  * reader — e.g. a hover preload the user never navigates to, or a load that
- * was superseded by another navigation.
+ * was superseded by another navigation. Such a query is closed instead of
+ * taking a slot in the idle buffer. Matches the default of React's
+ * `prewarmQuery()`. A late claim (a click after this) just resubscribes.
  */
-export const UNCLAIMED_TIMEOUT_MS = 30_000;
+export const UNCLAIMED_TIMEOUT_MS = 5_000;
 
 /** Opens and closes the underlying Convex subscription. Both must be idempotent. */
 export type SubscriptionHandle = {
@@ -49,7 +56,7 @@ export type SubscriptionHandle = {
 	close(): void;
 };
 
-let keepAliveConfig: Required<KeepAliveOptions> = { ...DEFAULT_KEEP_ALIVE };
+let cacheConfig: Required<QueryCacheOptions> = { ...DEFAULT_QUERY_CACHE };
 
 /** Idle queries in release order (oldest first), mapped to their close callback. */
 const idleQueries = new Map<RouteQuery, () => void>();
@@ -70,21 +77,21 @@ onCloseConvex(() => {
  * Configure the idle buffer. `false` disables it: queries are unsubscribed as
  * soon as they are no longer used by the current route.
  */
-export function configureKeepAlive(options: KeepAliveOptions | false): void {
-	keepAliveConfig =
+export function configureQueryCache(options: QueryCacheOptions | false): void {
+	cacheConfig =
 		options === false
-			? { maxQueries: 0, maxIdleMs: 0 }
+			? { maxIdleEntries: 0, expiration: 0 }
 			: {
-					maxQueries: Math.max(0, options.maxQueries ?? DEFAULT_KEEP_ALIVE.maxQueries),
-					maxIdleMs: Math.max(0, options.maxIdleMs ?? DEFAULT_KEEP_ALIVE.maxIdleMs)
+					maxIdleEntries: Math.max(0, options.maxIdleEntries ?? DEFAULT_QUERY_CACHE.maxIdleEntries),
+					expiration: Math.max(0, options.expiration ?? DEFAULT_QUERY_CACHE.expiration)
 				};
 	trimIdleQueries();
 }
 
-/** Unsubscribe the longest-idle queries until the buffer fits `maxQueries`. */
+/** Unsubscribe the longest-idle queries until the buffer fits `maxIdleEntries`. */
 function trimIdleQueries(): void {
 	for (const close of idleQueries.values()) {
-		if (idleQueries.size <= keepAliveConfig.maxQueries) return;
+		if (idleQueries.size <= cacheConfig.maxIdleEntries) return;
 		close();
 	}
 }
@@ -118,7 +125,7 @@ export class RouteQuery {
 		this.#keepAlive = keepAlive;
 		this.#key = key;
 		this.#open();
-		this.#startTimer(UNCLAIMED_TIMEOUT_MS, () => this.#release());
+		this.#startTimer(UNCLAIMED_TIMEOUT_MS, () => this.#close());
 		// Close idle duplicates after opening, so the Convex client keeps the
 		// shared subscription instead of removing and re-adding it.
 		if (key !== undefined) {
@@ -174,14 +181,14 @@ export class RouteQuery {
 	#release(): void {
 		if (this.#phase !== 'unclaimed' && this.#phase !== 'active') return;
 		this.#clearTimer();
-		if (!this.#keepAlive || keepAliveConfig.maxQueries === 0) {
+		if (!this.#keepAlive || cacheConfig.maxIdleEntries === 0) {
 			this.#close();
 			return;
 		}
 		this.#phase = 'idle';
 		idleQueries.set(this, () => this.#close());
-		if (Number.isFinite(keepAliveConfig.maxIdleMs)) {
-			this.#startTimer(keepAliveConfig.maxIdleMs, () => this.#close());
+		if (Number.isFinite(cacheConfig.expiration)) {
+			this.#startTimer(cacheConfig.expiration, () => this.#close());
 		}
 		trimIdleQueries();
 	}
@@ -277,5 +284,5 @@ export function reconcileRouteQueries(data: unknown): void {
 export function _resetQueryLifecycle(): void {
 	for (const query of [...openQueries]) query.dispose();
 	queriesInRoute = new Set();
-	keepAliveConfig = { ...DEFAULT_KEEP_ALIVE };
+	cacheConfig = { ...DEFAULT_QUERY_CACHE };
 }

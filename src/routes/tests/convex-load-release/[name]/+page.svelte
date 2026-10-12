@@ -48,8 +48,12 @@
 		</div>
 	{/if}
 
+	<!-- Preloading is off: after a click, page b renders this link under the
+	     mouse, and a hover preload would reopen page a's subscription before
+	     the test checks that it was released. -->
 	<a
 		data-testid="nav-link"
+		data-sveltekit-preload-data="off"
 		href="{resolve('/tests/convex-load-release/[name]', { name: other })}{keepAliveParam}"
 		class="text-sm text-blue-600 underline">Go to page {other}</a
 	>

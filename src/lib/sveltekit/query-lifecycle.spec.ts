@@ -2,10 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	RouteQuery,
 	UNCLAIMED_TIMEOUT_MS,
-	DEFAULT_KEEP_ALIVE,
+	DEFAULT_QUERY_CACHE,
 	_resetQueryLifecycle,
 	collectRouteQueries,
-	configureKeepAlive,
+	configureQueryCache,
 	markRouteQuery,
 	reconcileRouteQueries
 } from './query-lifecycle.js';
@@ -17,7 +17,7 @@ import { closeConvex } from '../internal/singleton.js';
 //
 // A route-scoped query stays subscribed while it is reachable from
 // `page.data` or read by an effect. After that it sits in an idle LRU buffer
-// (maxQueries / maxIdleMs) and is unsubscribed when it falls out.
+// (maxIdleEntries / expiration) and is unsubscribed when it falls out.
 // ---------------------------------------------------------------------------
 
 /** A handle that records how often the subscription was opened and closed. */
@@ -121,7 +121,7 @@ describe('RouteQuery — route reconciliation', () => {
 	});
 
 	it('resubscribes a closed query that becomes reachable again', () => {
-		configureKeepAlive(false);
+		configureQueryCache(false);
 		const { handle, query, result } = createQuery();
 		reconcileRouteQueries({ doc: result });
 		reconcileRouteQueries({});
@@ -137,11 +137,11 @@ describe('RouteQuery — route reconciliation', () => {
 
 describe('RouteQuery — idle buffer (keepAlive)', () => {
 	it('uses 10 queries / 60s as defaults', () => {
-		expect(DEFAULT_KEEP_ALIVE).toEqual({ maxQueries: 10, maxIdleMs: 60_000 });
+		expect(DEFAULT_QUERY_CACHE).toEqual({ maxIdleEntries: 10, expiration: 60_000 });
 	});
 
-	it('unsubscribes the longest-idle query when maxQueries is exceeded', () => {
-		configureKeepAlive({ maxQueries: 2 });
+	it('unsubscribes the longest-idle query when maxIdleEntries is exceeded', () => {
+		configureQueryCache({ maxIdleEntries: 2 });
 		const a = createQuery();
 		const b = createQuery();
 		const c = createQuery();
@@ -158,7 +158,7 @@ describe('RouteQuery — idle buffer (keepAlive)', () => {
 	});
 
 	it('refreshes LRU order when an idle query is used again', () => {
-		configureKeepAlive({ maxQueries: 2 });
+		configureQueryCache({ maxIdleEntries: 2 });
 		const a = createQuery();
 		const b = createQuery();
 		const c = createQuery();
@@ -174,8 +174,8 @@ describe('RouteQuery — idle buffer (keepAlive)', () => {
 		expect(c.handle.isOpen).toBe(true);
 	});
 
-	it('unsubscribes idle queries after maxIdleMs', () => {
-		configureKeepAlive({ maxIdleMs: 5_000 });
+	it('unsubscribes idle queries after expiration', () => {
+		configureQueryCache({ expiration: 5_000 });
 		const { handle, result } = createQuery();
 		reconcileRouteQueries({ doc: result });
 		reconcileRouteQueries({});
@@ -187,8 +187,8 @@ describe('RouteQuery — idle buffer (keepAlive)', () => {
 		expect(handle.isOpen).toBe(false);
 	});
 
-	it('keeps idle queries without a time limit when maxIdleMs is Infinity', () => {
-		configureKeepAlive({ maxIdleMs: Infinity });
+	it('keeps idle queries without a time limit when expiration is Infinity', () => {
+		configureQueryCache({ expiration: Infinity });
 		const { handle, result } = createQuery();
 		reconcileRouteQueries({ doc: result });
 		reconcileRouteQueries({});
@@ -199,7 +199,7 @@ describe('RouteQuery — idle buffer (keepAlive)', () => {
 	});
 
 	it('unsubscribes immediately when keepAlive is disabled globally', () => {
-		configureKeepAlive(false);
+		configureQueryCache(false);
 		const { handle, query, result } = createQuery();
 		reconcileRouteQueries({ doc: result });
 
@@ -224,7 +224,7 @@ describe('RouteQuery — idle buffer (keepAlive)', () => {
 		reconcileRouteQueries({ a: a.result, b: b.result });
 		reconcileRouteQueries({});
 
-		configureKeepAlive({ maxQueries: 1 });
+		configureQueryCache({ maxIdleEntries: 1 });
 
 		expect(a.handle.isOpen).toBe(false);
 		expect(b.handle.isOpen).toBe(true);
@@ -233,7 +233,7 @@ describe('RouteQuery — idle buffer (keepAlive)', () => {
 
 describe('RouteQuery — unclaimed queries (preloads, superseded loads)', () => {
 	it('releases a query that is never claimed after UNCLAIMED_TIMEOUT_MS', () => {
-		configureKeepAlive(false);
+		configureQueryCache(false);
 		const { handle } = createQuery();
 
 		vi.advanceTimersByTime(UNCLAIMED_TIMEOUT_MS - 1);
@@ -243,12 +243,30 @@ describe('RouteQuery — unclaimed queries (preloads, superseded loads)', () => 
 		expect(handle.isOpen).toBe(false);
 	});
 
-	it('moves an unclaimed query into the idle buffer when keepAlive is enabled', () => {
-		const { query } = createQuery();
+	it('closes an unclaimed query without taking an idle slot, even with the cache enabled', () => {
+		configureQueryCache({ maxIdleEntries: 1 });
+		const visited = createQuery();
+		reconcileRouteQueries({ doc: visited.result });
+		reconcileRouteQueries({});
+		const preload = createQuery();
 
 		vi.advanceTimersByTime(UNCLAIMED_TIMEOUT_MS);
 
-		expect(query.phase).toBe('idle');
+		expect(preload.query.phase).toBe('closed');
+		// The page the user actually visited keeps its slot.
+		expect(visited.query.phase).toBe('idle');
+		expect(visited.handle.isOpen).toBe(true);
+	});
+
+	it('resubscribes when a closed unclaimed query is claimed late (e.g. a slow click)', () => {
+		const { handle, query, result } = createQuery();
+		vi.advanceTimersByTime(UNCLAIMED_TIMEOUT_MS);
+		expect(handle.isOpen).toBe(false);
+
+		reconcileRouteQueries({ doc: result });
+
+		expect(query.phase).toBe('active');
+		expect(handle.isOpen).toBe(true);
 	});
 
 	it('does not time out once the route claims the query', () => {
@@ -264,7 +282,7 @@ describe('RouteQuery — unclaimed queries (preloads, superseded loads)', () => 
 describe('RouteQuery — readers', () => {
 	it('stays subscribed while an effect reads it, even when not in page.data', () => {
 		// e.g. a layout query shadowed by a page key with the same name
-		configureKeepAlive(false);
+		configureQueryCache(false);
 		const { handle, query, result } = createQuery();
 		reconcileRouteQueries({ doc: result });
 		query.retainReader();
@@ -299,7 +317,7 @@ describe('RouteQuery — readers', () => {
 	});
 
 	it('resubscribes a closed query when it is read again', () => {
-		configureKeepAlive(false);
+		configureQueryCache(false);
 		const { handle, query, result } = createQuery();
 		reconcileRouteQueries({ doc: result });
 		reconcileRouteQueries({});
@@ -312,7 +330,7 @@ describe('RouteQuery — readers', () => {
 	});
 
 	it('counts multiple readers', () => {
-		configureKeepAlive(false);
+		configureQueryCache(false);
 		const { handle, query } = createQuery();
 		query.retainReader();
 		query.retainReader();
@@ -439,7 +457,7 @@ describe('RouteQuery — idle duplicates (same key)', () => {
 
 describe('closeConvex()', () => {
 	it('disposes every open query and cancels its timers', async () => {
-		configureKeepAlive({ maxIdleMs: Infinity });
+		configureQueryCache({ expiration: Infinity });
 		const idle = createQuery();
 		reconcileRouteQueries({ doc: idle.result });
 		reconcileRouteQueries({});

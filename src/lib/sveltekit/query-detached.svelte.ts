@@ -35,7 +35,7 @@ export type DetachedQueryOptions = {
 	scope?: 'manual' | 'route';
 	/**
 	 * Route scope only: keep the subscription in the idle buffer after release
-	 * (see `initConvex({ keepAlive })`). `false` unsubscribes right away.
+	 * (see `initConvex({ queryCache })`). `false` unsubscribes right away.
 	 * @default true
 	 */
 	keepAlive?: boolean;

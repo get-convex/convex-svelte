@@ -7,7 +7,7 @@
  */
 import { ConvexClient, type ConvexClientOptions } from 'convex/browser';
 import { getSingletonClient, getSingletonUrl, setSingleton } from '../internal/singleton.js';
-import { configureKeepAlive, type KeepAliveOptions } from './query-lifecycle.js';
+import { configureQueryCache, type QueryCacheOptions } from './query-lifecycle.js';
 
 const IS_BROWSER = typeof globalThis.document !== 'undefined';
 
@@ -15,29 +15,30 @@ export type InitConvexOptions = ConvexClientOptions & {
 	/**
 	 * Idle buffer for queries created by `convexLoad()` / `convexLoadPaginated()`.
 	 * When the current route no longer uses such a query, it stays subscribed until
-	 * `maxQueries` newer idle queries push it out or `maxIdleMs` passes, so back
+	 * `maxIdleEntries` newer idle queries push it out or `expiration` passes, so back
 	 * navigation and revisits are instant. Pass `false` to unsubscribe immediately.
-	 * @default { maxQueries: 10, maxIdleMs: 60_000 }
+	 * Configures convex-svelte, not the `ConvexClient`.
+	 * @default { maxIdleEntries: 10, expiration: 60_000 }
 	 */
-	keepAlive?: KeepAliveOptions | false;
+	queryCache?: QueryCacheOptions | false;
 };
 
 /**
  * Initialize the Convex client at module level (before any component mounts).
  * Call from `hooks.client.ts` to ensure the client exists before `transport.decode`.
  * Idempotent — subsequent calls with the same URL return the existing client.
- * A `keepAlive` option is still applied, so editing it in `hooks.ts` takes
+ * A `queryCache` option is still applied, so editing it in `hooks.ts` takes
  * effect on HMR.
  *
  * @param url - Your Convex deployment URL (e.g. `PUBLIC_CONVEX_URL`).
- * @param options - Optional `ConvexClientOptions`, plus `keepAlive` for `convexLoad()` queries.
+ * @param options - Optional `ConvexClientOptions`, plus `queryCache` for `convexLoad()` queries.
  * @returns The singleton `ConvexClient` instance.
  */
 export function initConvex(url: string, options: InitConvexOptions = {}): ConvexClient {
 	if (!url || typeof url !== 'string') {
 		throw new Error('initConvex requires a non-empty URL string');
 	}
-	const { keepAlive, ...clientOptions } = options;
+	const { queryCache, ...clientOptions } = options;
 	const existing = getSingletonClient();
 	// Only one deployment per app is supported — fail loudly instead of
 	// silently handing back a client for a different URL.
@@ -48,8 +49,8 @@ export function initConvex(url: string, options: InitConvexOptions = {}): Convex
 		);
 	}
 	// Applied only after validation, so a rejected call has no side effects.
-	if (keepAlive !== undefined) {
-		configureKeepAlive(keepAlive);
+	if (queryCache !== undefined) {
+		configureQueryCache(queryCache);
 	}
 	if (existing) {
 		return existing;

@@ -50,7 +50,7 @@ import { createDetachedQuery } from './query-detached.svelte.js';
 import { createDetachedPaginatedQuery } from './paginated-query-detached.svelte.js';
 import {
 	_resetQueryLifecycle,
-	configureKeepAlive,
+	configureQueryCache,
 	reconcileRouteQueries
 } from './query-lifecycle.js';
 
@@ -111,7 +111,7 @@ describe('createDetachedQuery — manual scope', () => {
 
 describe('createDetachedQuery — route scope', () => {
 	it('unsubscribes when the route no longer uses it (keepAlive disabled)', () => {
-		configureKeepAlive(false);
+		configureQueryCache(false);
 		const result = createDetachedQuery(ref, {}, [], { scope: 'route' });
 		flush();
 		reconcileRouteQueries({ messages: result });
@@ -153,7 +153,7 @@ describe('createDetachedQuery — route scope', () => {
 	});
 
 	it('resubscribes once when used again after release', () => {
-		configureKeepAlive(false);
+		configureQueryCache(false);
 		const result = createDetachedQuery(ref, {}, [], { scope: 'route' });
 		flush();
 		reconcileRouteQueries({ messages: result });
@@ -166,7 +166,7 @@ describe('createDetachedQuery — route scope', () => {
 	});
 
 	it('clears isStale when the resubscribed query receives data', () => {
-		configureKeepAlive(false);
+		configureQueryCache(false);
 		const result = createDetachedQuery(ref, {}, [], { scope: 'route' });
 		flush();
 		reconcileRouteQueries({ messages: result });
@@ -195,7 +195,7 @@ describe('createDetachedPaginatedQuery', () => {
 	});
 
 	it('unsubscribes when the route no longer uses it (keepAlive disabled)', () => {
-		configureKeepAlive(false);
+		configureQueryCache(false);
 		const result = createDetachedPaginatedQuery(ref, {}, { initialNumItems: 10, scope: 'route' });
 		flush();
 		reconcileRouteQueries({ messages: result });
@@ -267,7 +267,7 @@ describe('createDetachedPaginatedQuery — loadMore after release', () => {
 	});
 
 	it('queues loadMore while released and sends it to the new subscription', () => {
-		configureKeepAlive(false);
+		configureQueryCache(false);
 		const oldLoadMore = vi.fn(() => true);
 		const newLoadMore = vi.fn(() => true);
 		const result = createDetachedPaginatedQuery(ref, {}, { initialNumItems: 10, scope: 'route' });

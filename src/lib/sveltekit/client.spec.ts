@@ -57,7 +57,7 @@ describe('initConvex', () => {
 	});
 });
 
-describe('initConvex — keepAlive', () => {
+describe('initConvex — queryCache', () => {
 	/** Create a convexLoad-style query, let the route use it, then navigate away. */
 	function releaseRouteQuery() {
 		const handle = { open: vi.fn(), close: vi.fn() };
@@ -73,30 +73,30 @@ describe('initConvex — keepAlive', () => {
 		expect(releaseRouteQuery().close).not.toHaveBeenCalled();
 	});
 
-	it('keepAlive: false unsubscribes released queries immediately', () => {
-		initConvex('https://example.convex.cloud', { keepAlive: false });
+	it('queryCache: false unsubscribes released queries immediately', () => {
+		initConvex('https://example.convex.cloud', { queryCache: false });
 
 		expect(releaseRouteQuery().close).toHaveBeenCalledOnce();
 	});
 
-	it('a rejected call (different URL) does not change keepAlive', () => {
+	it('a rejected call (different URL) does not change queryCache', () => {
 		initConvex('https://a.convex.cloud');
 
-		expect(() => initConvex('https://b.convex.cloud', { keepAlive: false })).toThrow();
+		expect(() => initConvex('https://b.convex.cloud', { queryCache: false })).toThrow();
 		expect(releaseRouteQuery().close).not.toHaveBeenCalled();
 	});
 
-	it('a repeated call with the same URL applies keepAlive (HMR)', () => {
+	it('a repeated call with the same URL applies queryCache (HMR)', () => {
 		const first = initConvex('https://example.convex.cloud');
-		const second = initConvex('https://example.convex.cloud', { keepAlive: false });
+		const second = initConvex('https://example.convex.cloud', { queryCache: false });
 
 		expect(second).toBe(first);
 		expect(releaseRouteQuery().close).toHaveBeenCalledOnce();
 	});
 
-	it('does not pass keepAlive on to the ConvexClient', () => {
+	it('does not pass queryCache on to the ConvexClient', () => {
 		initConvex('https://example.convex.cloud', {
-			keepAlive: { maxQueries: 3 },
+			queryCache: { maxIdleEntries: 3 },
 			verbose: true
 		});
 
