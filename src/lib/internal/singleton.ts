@@ -7,10 +7,12 @@
  *
  * This avoids a circular dependency between core and sveltekit.
  */
-import type { ConvexClient } from 'convex/browser';
+import type { ConvexClient, ConvexClientOptions } from 'convex/browser';
 
 let _singletonClient: ConvexClient | null = null;
 let _singletonUrl: string | null = null;
+// Options the singleton was created with (see client_options.ts).
+let _singletonOptions: ConvexClientOptions = {};
 
 // ---------------------------------------------------------------------------
 // Deferred subscription queue for transport.decode → setupAuth coordination.
@@ -84,6 +86,7 @@ export function getSingletonClient(): ConvexClient | null {
 	if (_singletonClient?.closed) {
 		_singletonClient = null;
 		_singletonUrl = null;
+		_singletonOptions = {};
 		return null;
 	}
 	return _singletonClient;
@@ -105,6 +108,7 @@ export async function closeConvex(): Promise<void> {
 	const client = _singletonClient;
 	_singletonClient = null;
 	_singletonUrl = null;
+	_singletonOptions = {};
 	// Restore defer mode so the next init cycle coordinates with setupAuth
 	// again instead of firing subscriptions immediately.
 	_deferredSubscriptions = [];
@@ -118,9 +122,19 @@ export function getSingletonUrl(): string | null {
 	return _singletonUrl;
 }
 
-export function setSingleton(url: string, client: ConvexClient): void {
+/** Options the current client was created with. */
+export function getSingletonOptions(): ConvexClientOptions {
+	return _singletonOptions;
+}
+
+export function setSingleton(
+	url: string,
+	client: ConvexClient,
+	options: ConvexClientOptions = {}
+): void {
 	_singletonUrl = url;
 	_singletonClient = client;
+	_singletonOptions = options;
 }
 
 /**
