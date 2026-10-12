@@ -27,8 +27,9 @@ test.describe('convexLoad — SSR hydration payload', () => {
 		const response = await page.goto('/tests/convex-load-server');
 		const html = (await response?.text()) ?? '';
 
-		// The handle marks the page with an (empty) payload…
-		expect(html).toContain('data-convex-load>{}<');
+		// Nothing to embed: no payload element and no leftover placeholder…
+		expect(html).not.toContain('data-convex-load');
+		expect(html).not.toContain('%convex.hydration%');
 		// …and a result the server load only used internally never appears.
 		expect(html).not.toContain('__e2e_server_private__');
 		// Still rendered from SSR and upgraded to a live subscription.

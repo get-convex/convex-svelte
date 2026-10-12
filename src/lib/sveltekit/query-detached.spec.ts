@@ -459,7 +459,7 @@ describe('openDetachedQuery — immediate subscription with first value (convexL
 	});
 
 	it('resubscribes through the deferred queue after a release (only the first open is immediate)', () => {
-		configureKeepAlive(false);
+		configureQueryCache(false);
 		const { result } = openDetachedQuery(ref, {}, undefined, { scope: 'route', immediate: true });
 		callbacks().onResult(['first']);
 		reconcileRouteQueries({ messages: result });

@@ -46,6 +46,13 @@ export function recordForHydration(key: string, value: unknown): void {
 
 export const PAYLOAD_ATTRIBUTE = 'data-convex-load';
 
+/**
+ * Placeholder in the `<head>` of `src/app.html` that `convexLoadHydration`
+ * replaces with the payload. A placeholder replaced in `transformPageChunk` is
+ * how SvelteKit's docs inject request-specific markup (e.g. `%lang%`).
+ */
+export const HYDRATION_PLACEHOLDER = '%convex.hydration%';
+
 // Inside a <script> element only `</script` and `<!--` are special; escaping
 // every `<` covers both. U+2028/U+2029 are escaped for older JS parsers.
 // Same approach as SvelteKit's own serialize_data.
@@ -57,10 +64,12 @@ const escapes: Record<string, string> = {
 };
 
 /**
- * Server: build the `<script>` element holding the collected results. Emitted
- * even when empty, so the browser knows the handle is active (dev warnings).
+ * Server: build the `<script>` element holding the collected results, or `''`
+ * when nothing was collected (e.g. `ssr = false`, or no universal convexLoad).
+ * The browser then knows any element it finds holds real server results.
  */
 export function serializeHydrationPayload(collector: HydrationCollector): string {
+	if (collector.size === 0) return '';
 	const payload: Record<string, JSONValue> = {};
 	for (const [key, value] of collector) {
 		payload[key] = convexToJson(value);
@@ -69,109 +78,9 @@ export function serializeHydrationPayload(collector: HydrationCollector): string
 	return `<script type="application/json" ${PAYLOAD_ATTRIBUTE}>${json}</script>`;
 }
 
-/** Elements whose content the HTML parser treats as text: tags inside don't count. */
-const rawTextElements = new Set([
-	'script',
-	'style',
-	'textarea',
-	'title',
-	'noscript',
-	'iframe',
-	'noembed',
-	'noframes',
-	'xmp'
-]);
-
-const isTagBoundary = (char: string | undefined) => char === undefined || /[\s/>]/.test(char);
-
-/** Index just past the `>` of the tag starting at `start`, skipping quoted attribute values. */
-function endOfTag(html: string, start: number): number {
-	for (let i = start + 1; i < html.length; i++) {
-		const char = html[i];
-		if (char === '>') return i + 1;
-		if (char !== '=') continue;
-		let valueStart = i + 1;
-		while (/\s/.test(html[valueStart] ?? '')) valueStart++;
-		const quote = html[valueStart];
-		if (quote === '"' || quote === "'") {
-			const close = html.indexOf(quote, valueStart + 1);
-			if (close === -1) return -1;
-			i = close;
-		}
-	}
-	return -1;
-}
-
-/** Index of the end tag `</name` closing a raw-text element, from `from` on. */
-function closingTagIndex(html: string, name: string, from: number): number {
-	for (let i = html.indexOf(`</${name}`, from); i !== -1; i = html.indexOf(`</${name}`, i + 1)) {
-		if (isTagBoundary(html[i + name.length + 2])) return i;
-	}
-	return -1;
-}
-
-/**
- * Index of the first real `tag` (e.g. `</head` or `<body`) in `html`: skips
- * comments, attribute values, and the content of raw-text elements such as
- * `<script>` — `"</head>"` inside a script string is not the end of the head.
- * `-1` if there is none.
- */
-export function findTag(html: string, tag: string): number {
-	// ASCII-only case folding keeps every index valid for `html` (unlike
-	// toLowerCase(), which can change the length, e.g. for "İ").
-	const lower = html.replace(/[A-Z]+/g, (match) => match.toLowerCase());
-	let i = lower.indexOf('<');
-	while (i !== -1) {
-		if (lower.startsWith('<!--', i)) {
-			const end = lower.indexOf('-->', i + 4);
-			if (end === -1) return -1;
-			i = lower.indexOf('<', end + 3);
-			continue;
-		}
-		if (lower[i + 1] === '!' || lower[i + 1] === '?') {
-			// Doctype, `<?…>`, `<![CDATA[…>`: the HTML parser reads these up to the
-			// next `>` (as the doctype or a "bogus comment").
-			const end = lower.indexOf('>', i + 2);
-			if (end === -1) return -1;
-			i = lower.indexOf('<', end + 1);
-			continue;
-		}
-		if (lower.startsWith(tag, i) && isTagBoundary(lower[i + tag.length])) return i;
-
-		const name = /^<\/?([a-z][^\s/>]*)/.exec(lower.slice(i, i + 32))?.[1];
-		if (name === undefined) {
-			// A `<` that doesn't start a tag is text.
-			i = lower.indexOf('<', i + 1);
-			continue;
-		}
-		const tagEnd = endOfTag(lower, i);
-		if (tagEnd === -1) return -1;
-		if (lower[i + 1] !== '/' && rawTextElements.has(name)) {
-			i = closingTagIndex(lower, name, tagEnd);
-			continue;
-		}
-		i = lower.indexOf('<', tagEnd);
-	}
-	return -1;
-}
-
-/**
- * Server: insert the payload into the page HTML — in `<head>`, so the parser
- * has created it before SvelteKit's start script (in `<body>`) can run the
- * hydration loads, even with inline bundles or a slowly streamed document.
- */
-export function injectHydrationPayload(html: string, collector: HydrationCollector): string {
-	const script = serializeHydrationPayload(collector);
-	for (const tag of ['</head', '<body']) {
-		const index = findTag(html, tag);
-		if (index !== -1) return html.slice(0, index) + script + html.slice(index);
-	}
-	return script + html;
-}
-
 /** Browser: parsed payload of the initial document; `null` once hydration is over. */
 let clientPayload: Map<string, JSONValue> | null | undefined;
-/** Browser: the initial document contained a payload, i.e. the handle is active. */
+/** Browser: the initial document contained server results (the handle is active). */
 let hasPayloadElement = false;
 
 function readClientPayload(): Map<string, JSONValue> {
@@ -199,13 +108,30 @@ export function takeHydratedValue(key: string): { value: Value } | undefined {
 	}
 	clientPayload ??= readClientPayload();
 	const json = clientPayload.get(key);
-	return json === undefined ? undefined : { value: jsonToConvex(json) };
+	if (json === undefined) return undefined;
+	try {
+		return { value: jsonToConvex(json) };
+	} catch (error) {
+		// E.g. HTML rewritten by a proxy, or different convex versions on server
+		// and client. The payload is only an optimization: query instead.
+		warnMalformedPayload(error);
+		return undefined;
+	}
+}
+
+let warnedMalformed = false;
+
+function warnMalformedPayload(error: unknown): void {
+	if (!DEV || warnedMalformed) return;
+	warnedMalformed = true;
+	console.warn('[convex-svelte] Ignoring an unreadable convexLoad hydration payload:', error);
 }
 
 /**
  * Browser, dev only: explain why a load re-running during hydration found no
- * server result although the handle is active — it now queries Convex before
- * `setupAuth()`.
+ * server result although the server embedded results for this page — it now
+ * queries Convex before `setupAuth()`. Pages without results (e.g. `ssr =
+ * false`) stay quiet, since there is nothing to fix there.
  */
 export function warnHydrationMiss(functionName: string): void {
 	if (!DEV || !hasPayloadElement || !isInitialHydration()) return;
@@ -222,4 +148,5 @@ export function warnHydrationMiss(functionName: string): void {
 export function _resetHydrationPayload(): void {
 	clientPayload = undefined;
 	hasPayloadElement = false;
+	warnedMalformed = false;
 }

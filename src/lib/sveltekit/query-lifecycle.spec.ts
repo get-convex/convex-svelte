@@ -534,7 +534,7 @@ describe('closeConvex()', () => {
 
 describe('RouteQuery — holdWhile (load awaiting its first value)', () => {
 	it('does not time out while the first value is pending (e.g. offline)', async () => {
-		configureKeepAlive(false);
+		configureQueryCache(false);
 		const { handle, query } = createQuery();
 		let settle = () => {};
 		query.holdWhile(new Promise<void>((resolve) => (settle = resolve)));
@@ -550,7 +550,7 @@ describe('RouteQuery — holdWhile (load awaiting its first value)', () => {
 	});
 
 	it('restarts the unclaimed timeout after a rejected first value too', async () => {
-		configureKeepAlive(false);
+		configureQueryCache(false);
 		const { handle, query } = createQuery();
 		let fail = () => {};
 		const pending = new Promise<void>((_, reject) => (fail = () => reject(new Error('x'))));

@@ -145,7 +145,7 @@ export class RouteQuery {
 		this.#clearTimer();
 		const restart = () => {
 			if (this.#phase === 'unclaimed') {
-				this.#startTimer(UNCLAIMED_TIMEOUT_MS, () => this.#release());
+				this.#startTimer(UNCLAIMED_TIMEOUT_MS, () => this.#close());
 			}
 		};
 		pending.then(restart, restart);

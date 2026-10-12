@@ -65,10 +65,10 @@ afterEach(() => {
 });
 
 describe('serializeHydrationPayload — server', () => {
-	it('emits an empty payload when nothing was recorded (marks the handle as active)', async () => {
+	it('emits nothing when nothing was recorded (e.g. ssr = false)', async () => {
 		const { hydration } = await loadModules();
 
-		expect(scriptText(hydration.serializeHydrationPayload(new Map()))).toBe('{}');
+		expect(hydration.serializeHydrationPayload(new Map())).toBe('');
 	});
 
 	it('cannot be broken out of: no raw "<" inside the script element', async () => {
@@ -98,112 +98,6 @@ describe('serializeHydrationPayload — server', () => {
 		const collector = collectorWith(hydration, { 'a|{}': undefined });
 
 		expect(collector.size).toBe(0);
-	});
-});
-
-describe('injectHydrationPayload — server', () => {
-	it("inserts the payload at the end of <head>, before SvelteKit's start script", async () => {
-		const { hydration } = await loadModules();
-		const collector = collectorWith(hydration, { 'a|{}': 1 });
-
-		const html = hydration.injectHydrationPayload(
-			'<html><head><title>t</title></head><body><script>start()</script></body></html>',
-			collector
-		);
-
-		expect(html).toMatch(
-			/^<html><head><title>t<\/title><script [^>]*data-convex-load>.*<\/script><\/head><body><script>start\(\)/
-		);
-	});
-
-	it('falls back to before <body>, then to the start of the document', async () => {
-		const { hydration } = await loadModules();
-		const collector = collectorWith(hydration, { 'a|{}': 1 });
-
-		expect(hydration.injectHydrationPayload('<body><p>x</p></body>', collector)).toMatch(
-			/^<script [^>]*data-convex-load>.*<\/script><body>/
-		);
-		expect(hydration.injectHydrationPayload('<p>x</p>', collector)).toMatch(
-			/^<script [^>]*data-convex-load>.*<\/script><p>x<\/p>$/
-		);
-	});
-
-	it('does not insert into a head script that contains "</head>"', async () => {
-		const { hydration } = await loadModules();
-		const collector = collectorWith(hydration, { 'a|{}': 1 });
-		const script = '<script>window.example = "</head>";</script>';
-
-		const html = hydration.injectHydrationPayload(
-			`<html><head>${script}</head><body></body></html>`,
-			collector
-		);
-
-		expect(html).toContain(script);
-		expect(html).toMatch(/<\/script><script [^>]*data-convex-load>.*<\/script><\/head><body>/);
-	});
-});
-
-describe('findTag — server', () => {
-	it.each([
-		['a script string', '<head><script>const s = "</head>";</script></head><body>'],
-		['a comment', '<head><!-- </head> --></head><body>'],
-		['a style element', '<head><style>/* </head> */</style></head><body>'],
-		['a title', '<head><title>&lt;/head> </head> demo</title></head><body>']
-	])('ignores </head> inside %s', async (_name, html) => {
-		const { hydration } = await loadModules();
-
-		expect(hydration.findTag(html, '</head')).toBe(html.lastIndexOf('</head>'));
-	});
-
-	it.each([
-		['an attribute value', `<head><meta content='Example </head>'></head><body>`],
-		['a quoted ">" in an attribute', '<head><meta content="a > b </head>"></head><body>'],
-		[
-			'a script, after a non-closing "</script-…"',
-			'<head><script>const t = "</script-not-a-tag></head>";</script></head><body>'
-		]
-	])('ignores </head> inside %s', async (_name, html) => {
-		const { hydration } = await loadModules();
-
-		expect(hydration.findTag(html, '</head')).toBe(html.lastIndexOf('</head>'));
-	});
-
-	it.each([
-		['a doctype', '<!DOCTYPE html><head></head><body>', 21],
-		// Bogus comments end at the first `>`, for the browser's parser too.
-		['a processing instruction', '<head><?x </head ?></head><body>', 19],
-		['a CDATA-like declaration', '<head><![CDATA[ </head> ]]></head><body>', 27]
-	])('handles %s like the HTML parser', async (_name, html, expected) => {
-		const { hydration } = await loadModules();
-
-		expect(hydration.findTag(html, '</head')).toBe(expected);
-	});
-
-	it('keeps indices exact when lowercasing would change the length ("İ")', async () => {
-		const { hydration } = await loadModules();
-		const html = '<head><title>İstanbul</title></head><body>';
-		const collector = collectorWith(hydration, { 'a|{}': 1 });
-
-		expect(hydration.findTag(html, '</head')).toBe(html.indexOf('</head>'));
-		expect(hydration.injectHydrationPayload(html, collector)).toMatch(
-			/<\/title><script [^>]*data-convex-load>.*<\/script><\/head><body>$/
-		);
-	});
-
-	it('is case-insensitive and requires a tag boundary', async () => {
-		const { hydration } = await loadModules();
-
-		expect(hydration.findTag('<HEAD></HEAD>', '</head')).toBe(6);
-		expect(hydration.findTag('<bodyguard><body>', '<body')).toBe(11);
-		expect(hydration.findTag('<script>"<body>"</script><body class="x">', '<body')).toBe(25);
-	});
-
-	it('returns -1 for missing tags and unterminated raw text', async () => {
-		const { hydration } = await loadModules();
-
-		expect(hydration.findTag('<p>x</p>', '</head')).toBe(-1);
-		expect(hydration.findTag('<script></head>', '</head')).toBe(-1);
-		expect(hydration.findTag('<!-- </head>', '</head')).toBe(-1);
 	});
 });
 
@@ -270,6 +164,19 @@ describe('takeHydratedValue — browser', () => {
 		expect(hydration.takeHydratedValue('k|{}')).toBeUndefined();
 	});
 
+	it('is a miss (not a crash) for a value that is not valid Convex JSON, and warns once in dev', async () => {
+		env.dev = true;
+		const { hydration } = await loadModules();
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		installDocument(JSON.stringify({ 'a|{}': { $integer: 5 }, 'b|{}': { $bytes: 7 } }));
+
+		expect(hydration.takeHydratedValue('a|{}')).toBeUndefined();
+		expect(hydration.takeHydratedValue('b|{}')).toBeUndefined();
+
+		expect(warn).toHaveBeenCalledOnce();
+		warn.mockRestore();
+	});
+
 	it('is never used after setupConvex / setupAuth flushed (client-side navigation)', async () => {
 		const { hydration, singleton } = await loadModules();
 		installDocument(JSON.stringify({ 'k|{}': 1 }));
@@ -292,11 +199,11 @@ describe('takeHydratedValue — browser', () => {
 });
 
 describe('warnHydrationMiss — browser, dev only', () => {
-	it('warns when the handle is active but a hydration load found no result', async () => {
+	it('warns when the server embedded results but a hydration load found none', async () => {
 		env.dev = true;
 		const { hydration } = await loadModules();
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-		installDocument('{}');
+		installDocument(JSON.stringify({ 'other|{}': 1 }));
 		hydration.takeHydratedValue('k|{}');
 
 		hydration.warnHydrationMiss('messages:list');
@@ -306,7 +213,7 @@ describe('warnHydrationMiss — browser, dev only', () => {
 		warn.mockRestore();
 	});
 
-	it('stays quiet without the handle, in production, or after hydration', async () => {
+	it('stays quiet without embedded results (no handle, ssr = false), in production, or after hydration', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
 		env.dev = true;
