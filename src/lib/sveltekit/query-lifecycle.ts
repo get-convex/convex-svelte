@@ -86,6 +86,8 @@ export function configureQueryCache(options: QueryCacheOptions | false): void {
 					expiration: Math.max(0, options.expiration ?? DEFAULT_QUERY_CACHE.expiration)
 				};
 	trimIdleQueries();
+	// Queries already idle get the new expiration too, counted from now.
+	for (const query of [...idleQueries.keys()]) query._restartIdleTimer();
 }
 
 /** Unsubscribe the longest-idle queries until the buffer fits `maxIdleEntries`. */
@@ -190,16 +192,40 @@ export class RouteQuery {
 	#release(): void {
 		if (this.#phase !== 'unclaimed' && this.#phase !== 'active') return;
 		this.#clearTimer();
-		if (!this.#keepAlive || cacheConfig.maxIdleEntries === 0) {
+		// An active copy (e.g. the replacement after invalidate(), claimed while
+		// this one still had a reader) already holds the subscription.
+		if (!this.#keepAlive || cacheConfig.maxIdleEntries === 0 || this.#hasActiveCopy()) {
 			this.#close();
 			return;
 		}
 		this.#phase = 'idle';
 		idleQueries.set(this, () => this.#close());
+		this.#scheduleExpiry();
+		trimIdleQueries();
+	}
+
+	/**
+	 * Restart the idle timer with the current `expiration`, after
+	 * `configureQueryCache()` changed it.
+	 * @internal
+	 */
+	_restartIdleTimer(): void {
+		if (this.#phase === 'idle') this.#scheduleExpiry();
+	}
+
+	#scheduleExpiry(): void {
+		this.#clearTimer();
 		if (Number.isFinite(cacheConfig.expiration)) {
 			this.#startTimer(cacheConfig.expiration, () => this.#close());
 		}
-		trimIdleQueries();
+	}
+
+	#hasActiveCopy(): boolean {
+		if (this.#key === undefined) return false;
+		for (const query of openQueries) {
+			if (query !== this && query.#key === this.#key && query.#phase === 'active') return true;
+		}
+		return false;
 	}
 
 	#close(): void {

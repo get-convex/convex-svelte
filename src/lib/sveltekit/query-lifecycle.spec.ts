@@ -450,6 +450,25 @@ describe('RouteQuery — idle duplicates (same key)', () => {
 		expect(visited.handle.isOpen).toBe(true);
 	});
 
+	it('does not cache a released query whose replacement is already active (invalidate())', () => {
+		configureQueryCache({ maxIdleEntries: 1 });
+		const visited = createQuery(true, 'messages:other|{}');
+		reconcileRouteQueries({ doc: visited.result });
+		reconcileRouteQueries({});
+
+		// A rendered query is replaced by a re-run load while it still has a reader.
+		const old = createQuery(true, 'messages:list|{}');
+		reconcileRouteQueries({ doc: old.result });
+		old.query.retainReader();
+		const replacement = createQuery(true, 'messages:list|{}');
+		reconcileRouteQueries({ doc: replacement.result });
+		old.query.releaseReader();
+
+		expect(old.query.phase).toBe('closed');
+		expect(replacement.handle.isOpen).toBe(true);
+		expect(visited.query.phase).toBe('idle');
+	});
+
 	it('does not close active queries with the same key', () => {
 		const first = createQuery(true, 'messages:list|{}');
 		reconcileRouteQueries({ doc: first.result });
@@ -467,6 +486,22 @@ describe('RouteQuery — idle duplicates (same key)', () => {
 		createQuery(true, 'messages:list|{"a":2}');
 
 		expect(first.query.phase).toBe('idle');
+	});
+});
+
+describe('configureQueryCache — changes apply to idle queries', () => {
+	it('applies a new expiration to queries that are already idle, from now on', () => {
+		configureQueryCache({ expiration: Infinity });
+		const { handle, result } = createQuery();
+		reconcileRouteQueries({ doc: result });
+		reconcileRouteQueries({});
+
+		configureQueryCache({ expiration: 1_000 });
+		vi.advanceTimersByTime(999);
+		expect(handle.isOpen).toBe(true);
+
+		vi.advanceTimersByTime(1);
+		expect(handle.isOpen).toBe(false);
 	});
 });
 
