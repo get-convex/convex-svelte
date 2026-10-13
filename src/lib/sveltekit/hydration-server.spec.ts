@@ -39,12 +39,15 @@ vi.mock('./route-data.svelte.js', () => ({ createRouteQuery: vi.fn() }));
 import { getFunctionName, makeFunctionReference } from 'convex/server';
 import { ConvexError, convexToJson } from 'convex/values';
 import { convexLoadHydration } from './hydration-server.js';
-import { HYDRATION_URL } from './hydration.js';
+import { queryThroughHydration } from './hydration.js';
+
 import { withServerConvexToken } from './server-token.js';
 import { convexLoad, convexLoadPaginated, ConvexLoadResult } from './transport.svelte.js';
 
 const ORIGIN = 'http://localhost';
 const PAGE = `${ORIGIN}/some/page`;
+/** An endpoint pathname, as convexLoad builds it (`/__convex-svelte/q/<hash>`). */
+const ENDPOINT = '/__convex-svelte/q/1a2b3c';
 
 /** Run a request through the handle; anything but the endpoint resolves to "page". */
 function handle(request: Request) {
@@ -54,8 +57,8 @@ function handle(request: Request) {
 	});
 }
 
-function queryRequest(body: unknown, headers: Record<string, string> = {}, page = PAGE) {
-	return new Request(`${page}${HYDRATION_URL}`, {
+function queryRequest(body: unknown, headers: Record<string, string> = {}, base = '') {
+	return new Request(`${ORIGIN}${base}${ENDPOINT}`, {
 		method: 'POST',
 		headers: { 'content-type': 'application/json', ...headers },
 		body: typeof body === 'string' ? body : JSON.stringify(body)
@@ -82,11 +85,12 @@ afterEach(() => {
 });
 
 describe('convexLoadHydration — endpoint', () => {
-	it('passes everything else through to the app, also GETs with the marker', async () => {
+	it('passes everything else through to the app, also GETs to an endpoint path', async () => {
 		for (const request of [
 			new Request(PAGE),
 			new Request(PAGE, { method: 'POST', body: 'form' }),
-			new Request(`${PAGE}${HYDRATION_URL}`)
+			new Request(`${ORIGIN}${ENDPOINT}`),
+			new Request(`${ORIGIN}/__convex-svelte/q/`, { method: 'POST', body: '{}' })
 		]) {
 			expect(await (await handle(request)).text()).toBe('page');
 		}
@@ -172,7 +176,7 @@ describe('convexLoadHydration — endpoint', () => {
 		expect(mockQuery).not.toHaveBeenCalled();
 	});
 
-	it('reads the marker from the request on prerendered pages, where url.searchParams throws', async () => {
+	it('reads the request URL, not event.url (SvelteKit restricts it on prerendered pages)', async () => {
 		mockQuery.mockResolvedValue(['prerendered']);
 		const request = queryRequest({ name: 'messages:list', args: {} });
 		const url = new URL(request.url);
@@ -191,13 +195,12 @@ describe('convexLoadHydration — endpoint', () => {
 		expect(await response.json()).toEqual({ value: ['prerendered'] });
 	});
 
-	it('serves the endpoint on any page, also below a base path (kit.paths.base)', async () => {
+	it('serves the endpoint below a base path (kit.paths.base)', async () => {
 		mockQuery.mockResolvedValue(['x']);
 
-		for (const page of [`${ORIGIN}/`, `${ORIGIN}/app`, `${ORIGIN}/app/tasks/`]) {
-			const response = await handle(queryRequest({ name: 'messages:list', args: {} }, {}, page));
-			expect(await response.json()).toEqual({ value: ['x'] });
-		}
+		const response = await handle(queryRequest({ name: 'messages:list', args: {} }, {}, '/app'));
+
+		expect(await response.json()).toEqual({ value: ['x'] });
 	});
 
 	it('accepts module paths and default exports', async () => {
@@ -251,6 +254,30 @@ describe('convexLoad / convexLoadPaginated on the server with { fetch }', () => 
 		expect(result.results).toEqual([1]);
 	});
 
+	it('requests the same endpoint path as the browser on the same page', async () => {
+		const urls: string[] = [];
+		const record = vi.fn(async (input: RequestInfo | URL) => {
+			urls.push(String(input));
+			return Response.json({ value: null });
+		});
+
+		// Server: the load runs inside the handle, rendering /some/page.
+		await convexLoadHydration({
+			event: { url: new URL(PAGE), request: new Request(PAGE) } as RequestEvent,
+			resolve: async () => {
+				await convexLoad(listRef, { a: 1 }, { fetch: record });
+				return new Response('page');
+			}
+		});
+		// Browser: hydrating /some/page.
+		vi.stubGlobal('location', { pathname: '/some/page' });
+		await queryThroughHydration(record, 'messages:list', { a: 1 });
+		vi.unstubAllGlobals();
+
+		const [server, browser] = urls.map((url) => url.slice(url.lastIndexOf('/')));
+		expect(server).toBe(browser);
+	});
+
 	it('queries directly with an explicit token, bypassing fetch', async () => {
 		mockQuery.mockResolvedValue([]);
 		const fetch = vi.fn();
@@ -284,7 +311,7 @@ describe('convexLoadHydration — handle order (dev)', () => {
 		const run = () =>
 			freshHandle({
 				event: {
-					url: new URL(`${PAGE}${HYDRATION_URL}`),
+					url: new URL(`${ORIGIN}${ENDPOINT}`),
 					request: queryRequest({ name: 'messages:list', args: {} })
 				} as RequestEvent,
 				resolve: async () => new Response('page')

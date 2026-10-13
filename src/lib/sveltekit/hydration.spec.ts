@@ -16,7 +16,7 @@ vi.mock('esm-env', () => ({
 }));
 
 import {
-	HYDRATION_URL,
+	HYDRATION_PATHNAME,
 	_resetHydrationWarnings,
 	queryThroughHydration,
 	warnMissingFetch
@@ -42,14 +42,12 @@ afterEach(() => {
 });
 
 describe('queryThroughHydration', () => {
-	it('POSTs the function name and Convex JSON args as JSON to the page-relative endpoint', async () => {
+	it('POSTs the function name and Convex JSON args as JSON to the endpoint', async () => {
 		const fetch = endpointFetch({ value: null });
 
 		await queryThroughHydration(fetch, 'messages:list', { count: 9007199254740993n });
 
-		// Relative to the page, so inside any base path, for page and data requests.
-		expect(HYDRATION_URL).toBe('?__convex-svelte=query');
-		expect(fetch).toHaveBeenCalledWith(HYDRATION_URL, {
+		expect(fetch).toHaveBeenCalledWith(expect.stringMatching(HYDRATION_PATHNAME), {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({
@@ -66,6 +64,42 @@ describe('queryThroughHydration', () => {
 		await queryThroughHydration(fetch, 'messages:list', { a: 1, b: [true] });
 
 		expect(fetch.mock.calls[0]).toEqual(fetch.mock.calls[1]);
+	});
+
+	it('gives every query and args its own pathname (prerendering writes one file per path)', async () => {
+		const fetch = endpointFetch({ value: null });
+
+		await queryThroughHydration(fetch, 'messages:list', { a: 1 });
+		await queryThroughHydration(fetch, 'messages:list', { a: 2 });
+		await queryThroughHydration(fetch, 'users:get', { a: 1 });
+		await queryThroughHydration(fetch, 'messages:list', { a: 1 });
+
+		const urls = fetch.mock.calls.map((call) => (call as unknown[])[0]);
+		expect(new Set(urls.slice(0, 3)).size).toBe(3);
+		expect(urls[3]).toBe(urls[0]);
+		for (const url of urls) expect(url).toMatch(/^\/__convex-svelte\/q\/[0-9a-z]+$/);
+	});
+
+	it('gives the same query on another page another pathname (prerendered pages write files)', async () => {
+		const fetch = endpointFetch({ value: null });
+
+		vi.stubGlobal('location', { pathname: '/prerendered' });
+		await queryThroughHydration(fetch, 'messages:list', { a: 1 });
+		vi.stubGlobal('location', { pathname: '/dynamic' });
+		await queryThroughHydration(fetch, 'messages:list', { a: 1 });
+		vi.unstubAllGlobals();
+
+		const [first, second] = fetch.mock.calls.map((call) => (call as unknown[])[0]);
+		expect(first).not.toBe(second);
+	});
+
+	it('queries directly (returns undefined) when the request fails, e.g. a network error', async () => {
+		vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const failing = vi.fn(async () => {
+			throw new TypeError('fetch failed');
+		});
+
+		await expect(queryThroughHydration(failing, 'messages:list', {})).resolves.toBeUndefined();
 	});
 
 	it('returns the value, round-tripping Convex types', async () => {
@@ -138,5 +172,38 @@ describe('warnMissingFetch', () => {
 		warnMissingFetch('messages:list');
 
 		expect(warn).not.toHaveBeenCalled();
+	});
+});
+
+describe('queryThroughHydration — base path (kit.paths.base)', () => {
+	async function endpointUrlWith(pathsModule: Record<string, unknown>) {
+		vi.resetModules();
+		vi.doMock('$app/paths', () => pathsModule);
+		const hydration = await import('./hydration.js');
+		const fetch = vi.fn(async () => new Response(JSON.stringify({ value: null })));
+		await hydration.queryThroughHydration(fetch, 'messages:list', {});
+		vi.doUnmock('$app/paths');
+		return (fetch.mock.calls[0] as unknown[])[0] as string;
+	}
+
+	it('uses resolve() where SvelteKit has it (2.26+ and 3)', async () => {
+		const url = await endpointUrlWith({
+			resolve: (path: string) => `/app${path}`,
+			asset: () => ''
+		});
+
+		expect(url).toMatch(/^\/app\/__convex-svelte\/q\/[0-9a-z]+$/);
+	});
+
+	it('falls back to base before SvelteKit 2.26', async () => {
+		// `resolve: undefined` stands in for the missing export: vitest's module
+		// mocks throw on undefined exports, real module namespaces don't.
+		expect(await endpointUrlWith({ base: '/app', assets: '', resolve: undefined })).toMatch(
+			/^\/app\/__convex-svelte\/q\//
+		);
+		// Relative paths: SvelteKit makes base relative to the page during SSR.
+		expect(await endpointUrlWith({ base: '..', assets: '', resolve: undefined })).toMatch(
+			/^\.\.\/__convex-svelte\/q\//
+		);
 	});
 });

@@ -15,19 +15,72 @@
  * This module is universal; the endpoint lives in `hydration-server.ts`.
  */
 import { DEV } from 'esm-env';
+import * as paths from '$app/paths';
 import { ConvexError, convexToJson, jsonToConvex, type JSONValue, type Value } from 'convex/values';
 
-/** Query parameter that marks requests to the endpoint of the `convexLoadHydration` handle. */
-export const HYDRATION_PARAM = '__convex-svelte';
+/** Path prefix of the endpoint the `convexLoadHydration` handle serves. */
+export const HYDRATION_PATH = '/__convex-svelte/q/';
 
 /**
- * The endpoint is the page itself plus a marker. SvelteKit resolves this
- * relative URL against the page — on the server and in the browser alike —
- * so it is always inside the app (and its `kit.paths.base`), where SvelteKit's
- * server-side fetch routes requests through the handle with the user's
- * cookies, and both sides record and match the same URL for the replay.
+ * Endpoint pathnames: one per page, query and args (`<prefix><hash>`).
+ * Prerendering writes every fetch of a page to a file named after its
+ * pathname, and at runtime SvelteKit's server-side fetch sends requests to
+ * such a path to the static file instead of through the app. So the pathname
+ * is neither the page's own nor shared with any other page — a prerendered
+ * page and a server-rendered one never request the same path.
  */
-export const HYDRATION_URL = `?${HYDRATION_PARAM}=query`;
+export const HYDRATION_PATHNAME = /\/__convex-svelte\/q\/[0-9a-z]+$/;
+
+let serverPagePathname: (() => string | undefined) | undefined;
+
+/**
+ * Register how the server reads the pathname of the page being rendered: the
+ * `convexLoadHydration` handle keeps it per request. Universal load functions
+ * can't read it on the server otherwise.
+ * @internal
+ */
+export function _setServerPagePathname(getter: () => string | undefined): void {
+	serverPagePathname = getter;
+}
+
+/** Pathname of the page being rendered, the same on the server and in the browser. */
+function pagePathname(): string {
+	return serverPagePathname?.() ?? globalThis.location?.pathname ?? '';
+}
+
+/**
+ * URL of the endpoint for a request body on the current page, under the app's
+ * base path (`kit.paths.base`): SvelteKit's server-side fetch only routes
+ * requests inside it through the app (handle, cookies, recording for replay).
+ *
+ * On the server with relative paths (SvelteKit's default) this is relative to
+ * the page, in the browser absolute; SvelteKit records and matches the
+ * resolved path, so both sides agree.
+ */
+function endpointUrl(body: string): string {
+	const path = `${HYDRATION_PATH}${hash(`${pagePathname()} ${body}`)}`;
+	// SvelteKit 2.26+ and 3 have resolve(); before 2.26 SvelteKit 2 only has base,
+	// and SvelteKit 3 no longer exports base. Each export is missing in some
+	// supported version, so read them dynamically rather than importing them.
+	const resolve = Reflect.get(paths, 'resolve') as ((path: string) => string) | undefined;
+	if (typeof resolve === 'function') return resolve(path);
+	const base = Reflect.get(paths, 'base') as string | undefined;
+	return `${base ?? ''}${path}`;
+}
+
+/** Short, stable hash (53-bit cyrb53) of a string, in base 36. */
+function hash(value: string): string {
+	let h1 = 0xdeadbeef;
+	let h2 = 0x41c6ce57;
+	for (let i = 0; i < value.length; i++) {
+		const char = value.charCodeAt(i);
+		h1 = Math.imul(h1 ^ char, 2654435761);
+		h2 = Math.imul(h2 ^ char, 1597334677);
+	}
+	h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+	h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+	return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
 
 /** SvelteKit's `fetch` from the load event. */
 export type LoadFetch = typeof globalThis.fetch;
@@ -55,23 +108,32 @@ export async function queryThroughHydration(
 	functionName: string,
 	args: Record<string, unknown>
 ): Promise<{ value: Value } | undefined> {
-	const body: HydrationRequestBody = { name: functionName, args: convexToJson(args as Value) };
-	const response = await fetch(HYDRATION_URL, {
-		method: 'POST',
-		// JSON, not a form submission: SvelteKit's CSRF check would reject a
-		// text/plain POST when `paths.origin` differs from the request origin.
-		headers: { 'content-type': 'application/json' },
-		body: JSON.stringify(body)
-	});
-	// Recognized by its body: a response SvelteKit replays carries no headers,
-	// and without the handle the request gets SvelteKit's 404 page.
-	const result: unknown = response.ok ? await response.json().catch(() => undefined) : undefined;
+	const body = JSON.stringify({
+		name: functionName,
+		args: convexToJson(args as Value)
+	} satisfies HydrationRequestBody);
+	let result: unknown;
+	try {
+		const response = await fetch(endpointUrl(body), {
+			method: 'POST',
+			// JSON, not a form submission: SvelteKit's CSRF check would reject a
+			// text/plain POST when `paths.origin` differs from the request origin.
+			headers: { 'content-type': 'application/json' },
+			body
+		});
+		// Recognized by its body: a response SvelteKit replays carries no headers,
+		// and without the handle the request gets SvelteKit's 404 page.
+		result = response.ok ? await response.json().catch(() => undefined) : undefined;
+	} catch {
+		// Unreachable (e.g. a network error): query directly instead.
+		result = undefined;
+	}
 	if (!isHydrationResponse(result)) {
 		warnOnce(
 			'handle',
-			'[convex-svelte] convexLoad({ fetch }) needs the convexLoadHydration handle in ' +
-				'hooks.server.ts. Without it, the load queries Convex directly and re-runs in the ' +
-				'browser before auth is set up.'
+			"[convex-svelte] convexLoad({ fetch }) couldn't reach the convexLoadHydration endpoint, " +
+				'so it queries Convex directly. Add the handle to hooks.server.ts, and pass fetch ' +
+				'in universal loads (+page.ts) — server loads need no fetch.'
 		);
 		return undefined;
 	}

@@ -5,17 +5,24 @@
  *
  * Import from `convex-svelte/sveltekit/server/hydration`.
  */
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { DEV } from 'esm-env';
 import { ConvexHttpClient } from 'convex/browser';
 import { makeFunctionReference } from 'convex/server';
 import { ConvexError, convexToJson, jsonToConvex, type JSONValue, type Value } from 'convex/values';
 import { getConvexUrl, _getServerToken } from '../internal/singleton.js';
 import {
-	HYDRATION_PARAM,
+	HYDRATION_PATHNAME,
+	_setServerPagePathname,
 	type HydrationRequestBody,
 	type HydrationResponseBody
 } from './hydration.js';
 import { _serverTokenContext } from './server-token.js';
+
+// Pathname of the page each request renders, for the endpoint URLs convexLoad
+// builds during SSR (see HYDRATION_PATHNAME).
+const pageStorage = new AsyncLocalStorage<string>();
+_setServerPagePathname(() => pageStorage.getStore());
 
 /**
  * SvelteKit `handle` that lets `convexLoad()` / `convexLoadPaginated()` in
@@ -62,13 +69,12 @@ export function convexLoadHydration<Event extends { url: URL; request: Request }
 	event: Event;
 	resolve: (event: Event) => Response | Promise<Response>;
 }): Response | Promise<Response> {
-	// A POST to any page with the marker (see HYDRATION_URL); everything else,
-	// including GETs with the marker, is the app's. The marker is read from the
-	// request: on prerendered pages SvelteKit forbids `event.url.searchParams`.
-	return event.request.method === 'POST' &&
-		new URL(event.request.url).searchParams.get(HYDRATION_PARAM) === 'query'
+	// POSTs to an endpoint pathname, below any base path (matched by suffix);
+	// everything else is the app's. Read from the request, like everything here.
+	const pathname = new URL(event.request.url).pathname;
+	return event.request.method === 'POST' && HYDRATION_PATHNAME.test(pathname)
 		? handleQuery(event.request)
-		: resolve(event);
+		: pageStorage.run(pathname, () => resolve(event));
 }
 
 /**

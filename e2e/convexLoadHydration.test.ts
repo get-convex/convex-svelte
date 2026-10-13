@@ -11,9 +11,9 @@ import { convexUrl, recordWebSocket, withMuteWord, type QueryEvent } from './hel
 // one live subscription each.
 // ---------------------------------------------------------------------------
 
-// The endpoint is the page itself plus this marker.
-const MARKER = '__convex-svelte=query';
-const RECORDED = /data-sveltekit-fetched data-url="[^"]*\?__convex-svelte=query"/g;
+// Endpoint requests: one pathname per page, query and args (/__convex-svelte/q/<hash>).
+const MARKER = '/__convex-svelte/q/';
+const RECORDED = /data-sveltekit-fetched data-url="[^"]*\/__convex-svelte\/q\/[0-9a-z]+"/g;
 
 test.describe('convexLoad — hydration via fetch replay', () => {
 	test('SvelteKit records the endpoint responses of universal loads in the HTML', async ({
