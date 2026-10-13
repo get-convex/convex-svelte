@@ -28,7 +28,12 @@ const collectorStorage = new AsyncLocalStorage<HydrationCollector>();
 // both flags are needed. There is no public API for them, so read them
 // defensively and fail closed: anything but the exact values SvelteKit sets
 // means nothing is embedded and convexLoad behaves as without this handle.
-type RequestState = { is_in_universal_load?: unknown; is_in_remote_function?: unknown };
+type RequestState = {
+	is_in_universal_load?: unknown;
+	is_in_remote_function?: unknown;
+	/** SvelteKit 3 only; used to tell it apart from older SvelteKit 2 versions. */
+	is_in_remote_query?: unknown;
+};
 type RequestStore = { state?: RequestState } | null;
 const tryGetRequestStore = (
 	kitInternal as unknown as { try_get_request_store?: () => RequestStore }
@@ -73,8 +78,12 @@ function checkMarkerSupport(): void {
 	}
 	warnedUnsupported = true;
 	console.warn(
-		'[convex-svelte] convexLoadHydration needs SvelteKit 2.56 or later to detect universal ' +
-			'load functions. No convexLoad results are embedded.'
+		typeof state?.is_in_remote_query === 'boolean'
+			? '[convex-svelte] convexLoadHydration does not support SvelteKit 3 yet: it no longer ' +
+					'marks universal load functions. No convexLoad results are embedded. Load data that ' +
+					'needs auth in +page.server.ts instead.'
+			: '[convex-svelte] convexLoadHydration needs SvelteKit 2.56 or later to detect universal ' +
+					'load functions. No convexLoad results are embedded.'
 	);
 }
 

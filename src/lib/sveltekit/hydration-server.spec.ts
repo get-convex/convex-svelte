@@ -250,11 +250,29 @@ describe('convexLoadHydration', () => {
 
 describe('convexLoadHydration — SvelteKit without the universal-load marker', () => {
 	it.each([
-		['older than 2.31 exports (accessor missing)', { try_get_request_store: undefined }],
-		['2.31–2.55 (store without the marker)', { try_get_request_store: () => ({ state: {} }) }],
+		[
+			'older than 2.31 exports (accessor missing)',
+			{ try_get_request_store: undefined },
+			'SvelteKit 2.56'
+		],
+		[
+			'2.31–2.55 (store without the marker)',
+			{ try_get_request_store: () => ({ state: {} }) },
+			'SvelteKit 2.56'
+		],
 		[
 			'a store without the remote-function flag',
-			{ try_get_request_store: () => ({ state: { is_in_universal_load: false } }) }
+			{ try_get_request_store: () => ({ state: { is_in_universal_load: false } }) },
+			'SvelteKit 2.56'
+		],
+		[
+			'SvelteKit 3 (no universal-load marker any more)',
+			{
+				try_get_request_store: () => ({
+					state: { is_in_remote_function: false, is_in_remote_query: false }
+				})
+			},
+			'SvelteKit 3'
 		],
 		[
 			'a throwing accessor',
@@ -262,9 +280,10 @@ describe('convexLoadHydration — SvelteKit without the universal-load marker', 
 				try_get_request_store: () => {
 					throw new Error('internal error');
 				}
-			}
+			},
+			'SvelteKit 2.56'
 		]
-	])('embeds nothing (fail-safe) and warns once: %s', async (_name, internal) => {
+	])('embeds nothing (fail-safe) and warns once: %s', async (_name, internal, expected) => {
 		vi.resetModules();
 		vi.doMock('@sveltejs/kit/internal/server', () => internal);
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -286,7 +305,7 @@ describe('convexLoadHydration — SvelteKit without the universal-load marker', 
 
 		expect(payloadOf(html)).toBeUndefined();
 		expect(warn).toHaveBeenCalledOnce();
-		expect(warn.mock.calls[0][0]).toContain('SvelteKit 2.56');
+		expect(warn.mock.calls[0][0]).toContain(expected);
 		warn.mockRestore();
 		vi.doUnmock('@sveltejs/kit/internal/server');
 	});

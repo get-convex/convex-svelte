@@ -69,7 +69,7 @@
 		}
 	},
 	"peerDependencies": {
-		"@sveltejs/kit": "^2.12.0",
+		"@sveltejs/kit": "^2.12.0 || ^3.0.0",
 		"convex": "^1.30.0",
 		"svelte": "^5.19.0"
 	},
