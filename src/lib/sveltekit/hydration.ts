@@ -76,9 +76,12 @@ export async function queryThroughHydration(
 		return undefined;
 	}
 	if ('error' in result) {
-		throw result.error.data === undefined
-			? new Error(result.error.message)
-			: new ConvexError(jsonToConvex(result.error.data));
+		if (result.error.data === undefined) throw new Error(result.error.message);
+		// Like ConvexHttpClient: the data, plus the server's message (with its
+		// request ID) instead of the stringified data ConvexError would default to.
+		const error = new ConvexError(jsonToConvex(result.error.data));
+		error.message = result.error.message;
+		throw error;
 	}
 	return { value: jsonToConvex(result.value) };
 }

@@ -80,11 +80,16 @@ describe('queryThroughHydration', () => {
 		await expect(queryThroughHydration(plain, 'messages:list', {})).rejects.toThrow('boom');
 
 		const withData = endpointFetch({
-			error: { message: 'not allowed', data: convexToJson({ code: 'FORBIDDEN' }) }
+			error: {
+				message: '[Request ID: abc] Server Error\nUncaught ConvexError: not allowed',
+				data: convexToJson({ code: 'FORBIDDEN' })
+			}
 		});
 		const error = await queryThroughHydration(withData, 'messages:list', {}).catch((e) => e);
 		expect(error).toBeInstanceOf(ConvexError);
 		expect(error.data).toEqual({ code: 'FORBIDDEN' });
+		// The server's message survives, like with ConvexHttpClient.
+		expect(error.message).toBe('[Request ID: abc] Server Error\nUncaught ConvexError: not allowed');
 	});
 
 	it('accepts a replayed response, which has no headers', async () => {

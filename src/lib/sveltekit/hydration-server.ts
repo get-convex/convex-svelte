@@ -63,8 +63,10 @@ export function convexLoadHydration<Event extends { url: URL; request: Request }
 	resolve: (event: Event) => Response | Promise<Response>;
 }): Response | Promise<Response> {
 	// A POST to any page with the marker (see HYDRATION_URL); everything else,
-	// including GETs with the marker, is the app's.
-	return event.request.method === 'POST' && event.url.searchParams.get(HYDRATION_PARAM) === 'query'
+	// including GETs with the marker, is the app's. The marker is read from the
+	// request: on prerendered pages SvelteKit forbids `event.url.searchParams`.
+	return event.request.method === 'POST' &&
+		new URL(event.request.url).searchParams.get(HYDRATION_PARAM) === 'query'
 		? handleQuery(event.request)
 		: resolve(event);
 }

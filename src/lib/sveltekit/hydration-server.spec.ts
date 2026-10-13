@@ -172,6 +172,25 @@ describe('convexLoadHydration — endpoint', () => {
 		expect(mockQuery).not.toHaveBeenCalled();
 	});
 
+	it('reads the marker from the request on prerendered pages, where url.searchParams throws', async () => {
+		mockQuery.mockResolvedValue(['prerendered']);
+		const request = queryRequest({ name: 'messages:list', args: {} });
+		const url = new URL(request.url);
+		// SvelteKit's prerendering guards url.searchParams like this.
+		Object.defineProperty(url, 'searchParams', {
+			get() {
+				throw new Error('Cannot access url.searchParams on a page with prerendering enabled');
+			}
+		});
+
+		const response = await convexLoadHydration({
+			event: { url, request } as RequestEvent,
+			resolve: async () => new Response('page')
+		});
+
+		expect(await response.json()).toEqual({ value: ['prerendered'] });
+	});
+
 	it('serves the endpoint on any page, also below a base path (kit.paths.base)', async () => {
 		mockQuery.mockResolvedValue(['x']);
 
