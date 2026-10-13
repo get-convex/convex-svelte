@@ -1,9 +1,27 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const { clientConstructed } = vi.hoisted(() => ({ clientConstructed: vi.fn() }));
+
+vi.mock('convex/browser', () => ({
+	ConvexClient: class {
+		closed = false;
+		constructor(url: string, options: unknown) {
+			clientConstructed(url, options);
+		}
+		async close() {
+			this.closed = true;
+		}
+	}
+}));
+
 import { initConvex } from './client.js';
 import { closeConvex, getSingletonClient } from '../internal/singleton.js';
+import { RouteQuery, _resetQueryLifecycle } from './query-lifecycle.js';
 
 afterEach(async () => {
 	await closeConvex();
+	_resetQueryLifecycle();
+	vi.clearAllMocks();
 });
 
 describe('initConvex', () => {
@@ -36,5 +54,55 @@ describe('initConvex', () => {
 
 	it('rejects an empty URL', () => {
 		expect(() => initConvex('')).toThrow('initConvex requires a non-empty URL string');
+	});
+});
+
+describe('initConvex — queryCache', () => {
+	/** Create a convexLoad-style query, let the route use it, then navigate away. */
+	function releaseRouteQuery() {
+		const handle = { open: vi.fn(), close: vi.fn() };
+		const query = new RouteQuery(handle);
+		query.setInRoute(true);
+		query.setInRoute(false);
+		return handle;
+	}
+
+	it('keeps released queries subscribed by default', () => {
+		initConvex('https://example.convex.cloud');
+
+		expect(releaseRouteQuery().close).not.toHaveBeenCalled();
+	});
+
+	it('queryCache: false unsubscribes released queries immediately', () => {
+		initConvex('https://example.convex.cloud', { queryCache: false });
+
+		expect(releaseRouteQuery().close).toHaveBeenCalledOnce();
+	});
+
+	it('a rejected call (different URL) does not change queryCache', () => {
+		initConvex('https://a.convex.cloud');
+
+		expect(() => initConvex('https://b.convex.cloud', { queryCache: false })).toThrow();
+		expect(releaseRouteQuery().close).not.toHaveBeenCalled();
+	});
+
+	it('a repeated call with the same URL applies queryCache (HMR)', () => {
+		const first = initConvex('https://example.convex.cloud');
+		const second = initConvex('https://example.convex.cloud', { queryCache: false });
+
+		expect(second).toBe(first);
+		expect(releaseRouteQuery().close).toHaveBeenCalledOnce();
+	});
+
+	it('does not pass queryCache on to the ConvexClient', () => {
+		initConvex('https://example.convex.cloud', {
+			queryCache: { maxIdleEntries: 3 },
+			verbose: true
+		});
+
+		expect(clientConstructed).toHaveBeenCalledWith('https://example.convex.cloud', {
+			disabled: true,
+			verbose: true
+		});
 	});
 });

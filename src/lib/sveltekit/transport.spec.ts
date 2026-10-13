@@ -87,7 +87,16 @@ vi.mock('convex/server', () => ({
 	makeFunctionReference: (name: string) => ({ _name: name })
 }));
 
-import { convexLoad, convexLoadPaginated } from './transport.svelte.js';
+import {
+	convexLoad,
+	convexLoadPaginated,
+	ConvexLoadResult,
+	ConvexLoadPaginatedResult,
+	encodeConvexLoad,
+	decodeConvexLoad,
+	encodeConvexLoadPaginated,
+	decodeConvexLoadPaginated
+} from './transport.svelte.js';
 import { createDetachedQuery } from './query-detached.svelte.js';
 import { createDetachedPaginatedQuery } from './paginated-query-detached.svelte.js';
 
@@ -119,7 +128,21 @@ describe('convexLoad — client-side navigation uses authenticated singleton', (
 
 		await convexLoad(mockRef, { muteWords: [] });
 
-		expect(createDetachedQuery).toHaveBeenCalledWith(mockRef, { muteWords: [] }, mockData);
+		expect(createDetachedQuery).toHaveBeenCalledWith(mockRef, { muteWords: [] }, mockData, {
+			scope: 'route',
+			keepAlive: true
+		});
+	});
+
+	it('passes keepAlive: false through to the route-scoped subscription', async () => {
+		mockSingletonQuery.mockResolvedValueOnce([]);
+
+		await convexLoad(mockRef, {}, { keepAlive: false });
+
+		expect(createDetachedQuery).toHaveBeenCalledWith(mockRef, {}, [], {
+			scope: 'route',
+			keepAlive: false
+		});
 	});
 
 	it('does not create ConvexHttpClient on client-side', async () => {
@@ -172,8 +195,23 @@ describe('convexLoadPaginated — client-side navigation uses authenticated sing
 			{ muteWords: [] },
 			{
 				initialNumItems: 10,
-				initialData: mockPaginatedData
+				initialData: mockPaginatedData,
+				scope: 'route',
+				keepAlive: true
 			}
+		);
+	});
+
+	it('passes keepAlive: false through to the route-scoped subscription', async () => {
+		const mockPaginatedData = { page: [], isDone: true, continueCursor: '' };
+		mockSingletonQuery.mockResolvedValueOnce(mockPaginatedData);
+
+		await convexLoadPaginated(mockRef, {}, { initialNumItems: 5, keepAlive: false });
+
+		expect(createDetachedPaginatedQuery).toHaveBeenCalledWith(
+			mockRef,
+			{},
+			{ initialNumItems: 5, initialData: mockPaginatedData, scope: 'route', keepAlive: false }
 		);
 	});
 
@@ -199,6 +237,7 @@ describe('convexLoad — skip support', () => {
 		expect(result.isLoading).toBe(false);
 		expect(result.error).toBeUndefined();
 		expect(result.isStale).toBe(false);
+		expect(() => result.dispose()).not.toThrow();
 
 		// No queries should have been made
 		expect(mockSingletonQuery).not.toHaveBeenCalled();
@@ -226,6 +265,7 @@ describe('convexLoadPaginated — skip support', () => {
 		expect(result.isLoading).toBe(false);
 		expect(result.error).toBeUndefined();
 		expect(result.loadMore(10)).toBe(false);
+		expect(() => result.dispose()).not.toThrow();
 
 		// No queries should have been made
 		expect(mockSingletonQuery).not.toHaveBeenCalled();
@@ -237,5 +277,54 @@ describe('convexLoadPaginated — skip support', () => {
 		await convexLoadPaginated(mockRef, 'skip', { initialNumItems: 10 });
 
 		expect(createDetachedPaginatedQuery).not.toHaveBeenCalled();
+	});
+});
+
+describe('transport — route scope and keepAlive survive the SSR boundary', () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+	});
+
+	it('round-trips keepAlive through encodeConvexLoad / decodeConvexLoad', () => {
+		const encoded = encodeConvexLoad(new ConvexLoadResult('messages:list', {}, [], false));
+		expect(encoded).toEqual({ refName: 'messages:list', args: {}, data: [], keepAlive: false });
+
+		decodeConvexLoad(encoded as Exclude<typeof encoded, false>);
+
+		expect(createDetachedQuery).toHaveBeenCalledWith({ _name: 'messages:list' }, {}, [], {
+			scope: 'route',
+			keepAlive: false
+		});
+	});
+
+	it('decodes payloads without keepAlive as keepAlive: true', () => {
+		decodeConvexLoad({ refName: 'messages:list', args: {}, data: [] });
+
+		expect(createDetachedQuery).toHaveBeenCalledWith({ _name: 'messages:list' }, {}, [], {
+			scope: 'route',
+			keepAlive: true
+		});
+	});
+
+	it('round-trips keepAlive through encodeConvexLoadPaginated / decodeConvexLoadPaginated', () => {
+		const data = { page: [], isDone: true, continueCursor: '' };
+		const encoded = encodeConvexLoadPaginated(
+			new ConvexLoadPaginatedResult('messages:paginatedList', {}, 10, data, false)
+		);
+		expect(encoded).toEqual({
+			refName: 'messages:paginatedList',
+			args: {},
+			initialNumItems: 10,
+			data,
+			keepAlive: false
+		});
+
+		decodeConvexLoadPaginated(encoded as Exclude<typeof encoded, false>);
+
+		expect(createDetachedPaginatedQuery).toHaveBeenCalledWith(
+			{ _name: 'messages:paginatedList' },
+			{},
+			{ initialNumItems: 10, initialData: data, scope: 'route', keepAlive: false }
+		);
 	});
 });

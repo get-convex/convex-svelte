@@ -96,6 +96,11 @@
 					description: 'Tests SSR transport with live upgrade via convexLoad'
 				},
 				{
+					title: 'ConvexLoad Route Release',
+					path: '/tests/convex-load-release/a',
+					description: 'Tests that convexLoad subscriptions are released after leaving a route'
+				},
+				{
 					title: 'ConvexLoadPaginated (SSR Transport)',
 					path: '/tests/convex-load-paginated',
 					description: 'Tests SSR transport with live paginated upgrade via convexLoadPaginated'

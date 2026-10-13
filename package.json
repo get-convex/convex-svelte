@@ -64,8 +64,14 @@
 		}
 	},
 	"peerDependencies": {
+		"@sveltejs/kit": "^2.12.0",
 		"convex": "^1.30.0",
 		"svelte": "^5.19.0"
+	},
+	"peerDependenciesMeta": {
+		"@sveltejs/kit": {
+			"optional": true
+		}
 	},
 	"devDependencies": {
 		"@changesets/cli": "^2.31.0",
