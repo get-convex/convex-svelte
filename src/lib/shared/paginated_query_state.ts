@@ -276,10 +276,12 @@ export class PaginatedQueryStateMachine<T> {
 				error: undefined
 			};
 		} else {
-			// Keep previous data, but mark as loading
+			// Keep previous data, but mark as loading — except for the initial
+			// args of SSR initialData, which is current, not previous, data
+			// (marking it loading would flash a loading state on hydration).
 			this.state = {
 				...this.state,
-				isLoading: true,
+				isLoading: !this.isUsingInitialData(),
 				error: undefined
 			};
 		}
@@ -295,6 +297,25 @@ export class PaginatedQueryStateMachine<T> {
 	 * "empty loading" snapshot to keep SSR-rendered content visible.
 	 */
 	onUpdate(update: PaginatedQueryUpdate<T>): void {
+		// Hydration guard: if using initial data, ignore empty loading snapshots
+		// This keeps SSR-rendered content visible until real data arrives.
+		// Checked before keepPreviousData: SSR data is not "previous" data, and
+		// marking it as loading would flash a loading state after hydration.
+		if (
+			this.isUsingInitialData() &&
+			update.results.length === 0 &&
+			update.status === 'LoadingFirstPage'
+		) {
+			// Just update loadMore so it can be called, but don't clear results
+			this.state = {
+				...this.state,
+				loadMore: update.loadMore,
+				isLoading: false
+			};
+			this.notify();
+			return;
+		}
+
 		if (
 			this.config.keepPreviousData &&
 			this.state.results.length > 0 &&
@@ -307,23 +328,6 @@ export class PaginatedQueryStateMachine<T> {
 				isLoading: true,
 				error: undefined,
 				loadMore: update.loadMore
-			};
-			this.notify();
-			return;
-		}
-
-		// Hydration guard: if using initial data, ignore empty loading snapshots
-		// This keeps SSR-rendered content visible until real data arrives
-		if (
-			this.isUsingInitialData() &&
-			update.results.length === 0 &&
-			update.status === 'LoadingFirstPage'
-		) {
-			// Just update loadMore so it can be called, but don't clear results
-			this.state = {
-				...this.state,
-				loadMore: update.loadMore,
-				isLoading: false
 			};
 			this.notify();
 			return;
