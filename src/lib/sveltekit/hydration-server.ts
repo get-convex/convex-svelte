@@ -79,9 +79,12 @@ function checkMarkerSupport(): void {
 	warnedUnsupported = true;
 	console.warn(
 		typeof state?.is_in_remote_query === 'boolean'
-			? '[convex-svelte] convexLoadHydration does not support SvelteKit 3 yet: it no longer ' +
-					'marks universal load functions. No convexLoad results are embedded. Load data that ' +
-					'needs auth in +page.server.ts instead.'
+			? '[convex-svelte] convexLoadHydration has no effect on SvelteKit 3 (it no longer marks ' +
+					'universal load functions), so no convexLoad results are embedded. A convexLoad() in ' +
+					'+page.ts / +layout.ts now re-runs in the browser before auth is set up. Fix: move ' +
+					'convexLoad() calls that need auth into +page.server.ts / +layout.server.ts (same code, ' +
+					'no other change), and remove convexLoadHydration from hooks.server.ts. See ' +
+					'https://docs.convex.dev/client/svelte/sveltekit-server-rendering#convexloadhydration'
 			: '[convex-svelte] convexLoadHydration needs SvelteKit 2.56 or later to detect universal ' +
 					'load functions. No convexLoad results are embedded.'
 	);
