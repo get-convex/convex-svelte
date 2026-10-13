@@ -39,13 +39,13 @@ describe('subscribePaginated', () => {
 			onError
 		);
 
-		expect(onError).toHaveBeenCalledWith(new Error('page failed'));
+		expect(onError).toHaveBeenCalledWith(new Error('page failed'), true);
 		expect(onSnapshot).not.toHaveBeenCalled();
 		cleanup();
 		expect(unsubscribe).toHaveBeenCalledOnce();
 	});
 
-	it('reports an error thrown by onPaginatedUpdate_experimental itself', () => {
+	it('reports an error thrown by onPaginatedUpdate_experimental itself, as not retryable', () => {
 		const onError = vi.fn();
 		const client = {
 			onPaginatedUpdate_experimental: vi.fn(() => {
@@ -55,7 +55,12 @@ describe('subscribePaginated', () => {
 
 		const cleanup = subscribePaginated(client, ref, {}, 10, vi.fn(), onError);
 
-		expect(onError).toHaveBeenCalledWith(new Error('failed page held by another subscriber'));
+		// Not retryable: the client registered the subscription before throwing and
+		// shares it per args, so a retry would fail the same way (convex-js#193).
+		expect(onError).toHaveBeenCalledWith(
+			new Error('failed page held by another subscriber'),
+			false
+		);
 		expect(() => cleanup()).not.toThrow();
 	});
 
@@ -84,7 +89,7 @@ describe('subscribePaginated', () => {
 		fail = true;
 		notify();
 
-		expect(onError).toHaveBeenCalledWith(new Error('page failed'));
+		expect(onError).toHaveBeenCalledWith(new Error('page failed'), true);
 	});
 
 	it('delivers a snapshot the client reports synchronously while subscribing, once', () => {

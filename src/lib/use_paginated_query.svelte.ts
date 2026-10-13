@@ -149,8 +149,8 @@ export function usePaginatedQuery<Query extends FunctionReference<'query'>>(
 					loadMore: (numItems: number) => current.loadMore(numItems)
 				}),
 			// An InvalidCursor resets the machine (once), which changes resetKey
-			// and re-runs this effect.
-			(error) => machine.onError(error)
+			// and re-runs this effect — unless resubscribing can't help.
+			(error, retryable) => machine.onError(error, { allowReset: retryable })
 		);
 
 		return unsubscribe;

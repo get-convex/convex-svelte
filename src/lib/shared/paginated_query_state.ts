@@ -362,10 +362,13 @@ export class PaginatedQueryStateMachine<T> {
 	 *
 	 * Detects InvalidCursor errors and triggers a pagination reset.
 	 *
+	 * @param options.allowReset - `false` surfaces even an InvalidCursor as the
+	 * error, e.g. when resubscribing can't help.
 	 * @returns `true` if we detected and handled an InvalidCursor (framework should resubscribe)
 	 */
-	onError(error: Error): boolean {
-		if (this.isInvalidCursorError(error) && this.invalidCursorResetArmed) {
+	onError(error: Error, options: { allowReset?: boolean } = {}): boolean {
+		const allowReset = options.allowReset ?? true;
+		if (allowReset && this.isInvalidCursorError(error) && this.invalidCursorResetArmed) {
 			this.invalidCursorResetArmed = false;
 			console.warn('PaginatedQueryStateMachine: InvalidCursor detected, resetting:', error.message);
 			this.pendingLoadMoreNumItems = null;

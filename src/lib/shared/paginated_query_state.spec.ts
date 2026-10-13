@@ -259,6 +259,16 @@ describe('PaginatedQueryStateMachine InvalidCursor reset limit (#61)', () => {
 		expect(machine.getSnapshot().error?.message).toContain('InvalidCursor');
 	});
 
+	it('surfaces an InvalidCursor without resetting when allowReset is false', () => {
+		const machine = machineWithArgs();
+		const before = machine.getSnapshot().resetKey;
+
+		expect(machine.onError(invalidCursor(), { allowReset: false })).toBe(false);
+
+		expect(machine.getSnapshot().resetKey).toBe(before);
+		expect(machine.getSnapshot().error?.message).toContain('InvalidCursor');
+	});
+
 	it('allows another reset once a page arrived', () => {
 		const machine = machineWithArgs();
 		machine.onError(invalidCursor());

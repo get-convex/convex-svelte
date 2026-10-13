@@ -138,9 +138,9 @@ export function openDetachedPaginatedQuery<Query extends FunctionReference<'quer
 			});
 			if (current.status !== 'LoadingFirstPage') settleFirstValue?.();
 		};
-		const onError = (e: Error) => {
+		const onError = (e: Error, retryable: boolean) => {
 			if (subscriptionGeneration !== generation) return;
-			if (machine.onError(e)) {
+			if (machine.onError(e, { allowReset: retryable })) {
 				// InvalidCursor: the machine reset pagination (once). Start over with
 				// a fresh subscription; a load keeps waiting for its first page.
 				queueMicrotask(restart);

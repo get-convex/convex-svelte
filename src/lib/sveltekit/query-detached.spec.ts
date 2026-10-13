@@ -719,6 +719,19 @@ describe('openDetachedPaginatedQuery — failed pages (#61)', () => {
 		expect(result.isLoading).toBe(false);
 	});
 
+	it('does not retry when subscribing itself throws (failed query held by another subscriber)', async () => {
+		client.onPaginatedUpdate_experimental.mockImplementationOnce(() => {
+			throw invalidCursor();
+		});
+
+		const { result, firstValue } = open();
+		await Promise.resolve();
+
+		expect(client.onPaginatedUpdate_experimental).toHaveBeenCalledOnce();
+		expect(await settledState(firstValue)).toBe('rejected');
+		expect(result.error?.message).toContain('InvalidCursor');
+	});
+
 	it('reports a failed page that getCurrentValue() throws, instead of throwing', async () => {
 		const subscription = paginatedSubscription();
 		subscription.fail(new Error('page failed'));

@@ -8,6 +8,12 @@
  * holds the query in a failed state (get-convex/convex-js#193). Thrown errors
  * are reported through `onError` here, so callers always get a cleanup function
  * back and their state machine sees the error.
+ *
+ * When `onPaginatedUpdate_experimental()` throws, the client has already
+ * registered the subscription but returned no handle to release it — only a
+ * fix in the client can roll that back (convex-js#193). Such errors are
+ * reported as not retryable: the client shares one paginated query per args, so
+ * a retry would hit the same failure and leave another registration behind.
  */
 import type { ConvexClient, PaginationStatus } from 'convex/browser';
 import type { FunctionArgs, FunctionReference } from 'convex/server';
@@ -31,7 +37,7 @@ export function subscribePaginated<Query extends FunctionReference<'query'>>(
 	args: FunctionArgs<Query>,
 	initialNumItems: number,
 	onSnapshot: (snapshot: PaginatedSnapshot) => void,
-	onError: (error: Error) => void
+	onError: (error: Error, retryable: boolean) => void
 ): () => void {
 	let subscription: ReturnType<ConvexClient['onPaginatedUpdate_experimental']> | undefined;
 	let failed = false;
@@ -42,7 +48,7 @@ export function subscribePaginated<Query extends FunctionReference<'query'>>(
 			current = subscription?.getCurrentValue() as PaginatedSnapshot | undefined;
 		} catch (error) {
 			failed = true;
-			onError(toError(error));
+			onError(toError(error), true);
 			return;
 		}
 		if (current) onSnapshot(current);
@@ -60,11 +66,11 @@ export function subscribePaginated<Query extends FunctionReference<'query'>>(
 			},
 			(error: Error) => {
 				failed = true;
-				onError(error);
+				onError(error, true);
 			}
 		);
 	} catch (error) {
-		onError(toError(error));
+		onError(toError(error), false);
 		return () => {};
 	}
 
