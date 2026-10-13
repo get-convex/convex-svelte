@@ -2,8 +2,8 @@ import { expect, test } from '@playwright/test';
 import { convexUrl, recordWebSocket, withMuteWord, type QueryEvent } from './helpers/websocket.js';
 
 // ---------------------------------------------------------------------------
-// convexLoad SSR hydration payload (convexLoadHydration handle in
-// src/hooks.server.ts).
+// convexLoad hydration via SvelteKit's fetch replay (convexLoad({ fetch }) in
+// universal loads, convexLoadHydration handle in src/hooks.server.ts).
 //
 // SvelteKit re-runs universal loads (+page.ts) in the browser during
 // hydration — before setupAuth() authenticated the client. They must reuse
@@ -11,15 +11,30 @@ import { convexUrl, recordWebSocket, withMuteWord, type QueryEvent } from './hel
 // one live subscription each.
 // ---------------------------------------------------------------------------
 
-test.describe('convexLoad — SSR hydration payload', () => {
-	test('embeds results of universal loads in the HTML', async ({ page }) => {
+const ENDPOINT = '/__convex-svelte/query';
+
+test.describe('convexLoad — hydration via fetch replay', () => {
+	test('SvelteKit records the endpoint responses of universal loads in the HTML', async ({
+		page
+	}) => {
 		const response = await page.goto('/tests/convex-load-release/a');
 		const html = (await response?.text()) ?? '';
 
-		expect(html).toContain('data-convex-load');
-		expect(html).toContain('__e2e_release_a__');
-		// In <head>, so it exists before SvelteKit's start script runs the loads.
-		expect(html.indexOf('data-convex-load')).toBeLessThan(html.indexOf('</head>'));
+		// One recorded response for the page's one universal convexLoad.
+		expect(html.match(/data-sveltekit-fetched data-url="\/__convex-svelte\/query"/g)).toHaveLength(
+			1
+		);
+	});
+
+	test('hydration makes no request to the endpoint', async ({ page }) => {
+		const requests: string[] = [];
+		page.on('request', (request) => {
+			if (request.url().includes(ENDPOINT)) requests.push(request.url());
+		});
+		await page.goto('/tests/convex-load-nested');
+		await expect(page.getByTestId('hydrated')).toContainText('true', { timeout: 5000 });
+
+		expect(requests).toEqual([]);
 	});
 
 	test('never embeds server-load results (returned ones use the transport)', async ({ page }) => {
@@ -27,9 +42,8 @@ test.describe('convexLoad — SSR hydration payload', () => {
 		const response = await page.goto('/tests/convex-load-server');
 		const html = (await response?.text()) ?? '';
 
-		// Nothing to embed: no payload element and no leftover placeholder…
-		expect(html).not.toContain('data-convex-load');
-		expect(html).not.toContain('%convex.hydration%');
+		// SvelteKit records no fetch of a server load…
+		expect(html).not.toContain(ENDPOINT);
 		// …and a result the server load only used internally never appears.
 		expect(html).not.toContain('__e2e_server_private__');
 		// Still rendered from SSR and upgraded to a live subscription.
@@ -80,8 +94,11 @@ test.describe('convexLoad — SSR hydration payload', () => {
 		const response = await page.goto('/tests/convex-load-nested');
 		const html = (await response?.text()) ?? '';
 
-		expect(html).toContain('__e2e_nested_layout__');
-		expect(html).toContain('__e2e_nested_page__');
+		// The universal layout and page loads: one recorded response each. The
+		// server layout's private result never appears.
+		expect(html.match(/data-sveltekit-fetched data-url="\/__convex-svelte\/query"/g)).toHaveLength(
+			2
+		);
 		expect(html).not.toContain('__e2e_nested_server_private__');
 
 		await expect(page.getByTestId('hydrated')).toContainText('true', { timeout: 5000 });
@@ -143,7 +160,7 @@ test.describe('convexLoad — SSR hydration payload', () => {
 		try {
 			// /tests/convex-load lists all messages, including the one above.
 			const response = await page.goto('/tests/convex-load');
-			expect(await response?.text()).toContain('data-convex-load');
+			expect(await response?.text()).toContain('data-sveltekit-fetched');
 			await expect(page.getByTestId('hydrated')).toContainText('true', { timeout: 5000 });
 			await expect(page.getByTestId('data')).toBeVisible();
 

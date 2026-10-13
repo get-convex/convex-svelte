@@ -1,121 +1,36 @@
 /**
- * Server half of the `convexLoad` SSR hydration payload (see `hydration.ts`).
+ * Server half of `convexLoad` hydration (see `hydration.ts`): the endpoint
+ * that a universal load's `fetch` calls, so SvelteKit can record the response
+ * and replay it during hydration.
  *
- * Import from `convex-svelte/sveltekit/server/hydration` — a separate entry
- * from `convex-svelte/sveltekit/server`, because it needs SvelteKit internals
- * (2.56+) that must not break `withServerConvexToken` on older versions.
+ * Import from `convex-svelte/sveltekit/server/hydration`.
  */
-import { AsyncLocalStorage } from 'node:async_hooks';
 import { DEV } from 'esm-env';
-import type { Handle } from '@sveltejs/kit';
-// Internal SvelteKit entry (used by its generated server code); it ships no
-// module types. Imported statically so we share SvelteKit's module instance.
-// @ts-expect-error -- no type declarations for this internal entry
-import * as kitInternal from '@sveltejs/kit/internal/server';
+import { ConvexHttpClient } from 'convex/browser';
+import { makeFunctionReference } from 'convex/server';
+import { ConvexError, convexToJson, jsonToConvex, type JSONValue, type Value } from 'convex/values';
+import { getConvexUrl, _getServerToken } from '../internal/singleton.js';
 import {
-	_setHydrationCollectorGetter,
-	HYDRATION_PLACEHOLDER,
-	serializeHydrationPayload,
-	type HydrationCollector
+	HYDRATION_ENDPOINT,
+	type HydrationRequestBody,
+	type HydrationResponseBody
 } from './hydration.js';
-
-const collectorStorage = new AsyncLocalStorage<HydrationCollector>();
-
-// SvelteKit (2.56+) marks the request store while a universal load runs on the
-// server (`state.is_in_universal_load`) — its remote functions use the same flag
-// to decide which results to serialize for hydration. A remote function called
-// from a universal load copies that state and sets `is_in_remote_function`, so
-// both flags are needed. There is no public API for them, so read them
-// defensively and fail closed: anything but the exact values SvelteKit sets
-// means nothing is embedded and convexLoad behaves as without this handle.
-type RequestState = {
-	is_in_universal_load?: unknown;
-	is_in_remote_function?: unknown;
-	/** SvelteKit 3 only; used to tell it apart from older SvelteKit 2 versions. */
-	is_in_remote_query?: unknown;
-};
-type RequestStore = { state?: RequestState } | null;
-const tryGetRequestStore = (
-	kitInternal as unknown as { try_get_request_store?: () => RequestStore }
-).try_get_request_store;
-
-/** SvelteKit's request state in the current context; `undefined` if unreadable. */
-function readRequestState(): RequestState | undefined {
-	try {
-		return tryGetRequestStore?.()?.state;
-	} catch {
-		return undefined;
-	}
-}
-
-/** Running in a universal load, and not in a remote function it called. */
-function isInUniversalLoad(): boolean {
-	const state = readRequestState();
-	return state?.is_in_universal_load === true && state.is_in_remote_function === false;
-}
-
-// Only record results of universal loads: those re-run in the browser, which
-// would fetch the same data itself. Server loads (+page.server.ts) may fetch
-// data they never return (or return only in part) — it must never end up in
-// the HTML. Their returned results reach the browser through the transport.
-_setHydrationCollectorGetter(() => (isInUniversalLoad() ? collectorStorage.getStore() : undefined));
-
-let warnedUnsupported = false;
+import { _serverTokenContext } from './server-token.js';
 
 /**
- * Inside `handle`, SvelteKit's request store exists and both markers are
- * `false`. Anything else means this SvelteKit version can't tell universal
- * loads (or remote functions) apart.
- */
-function checkMarkerSupport(): void {
-	const state = readRequestState();
-	if (
-		warnedUnsupported ||
-		(typeof state?.is_in_universal_load === 'boolean' &&
-			typeof state.is_in_remote_function === 'boolean')
-	) {
-		return;
-	}
-	warnedUnsupported = true;
-	console.warn(
-		typeof state?.is_in_remote_query === 'boolean'
-			? '[convex-svelte] convexLoadHydration has no effect on SvelteKit 3 (it no longer marks ' +
-					'universal load functions), so no convexLoad results are embedded. A convexLoad() in ' +
-					'+page.ts / +layout.ts now re-runs in the browser before auth is set up. Fix: move ' +
-					'convexLoad() calls that need auth into +page.server.ts / +layout.server.ts (same code, ' +
-					'no other change), and remove convexLoadHydration from hooks.server.ts. See ' +
-					'https://docs.convex.dev/client/svelte/sveltekit-server-rendering#convexloadhydration'
-			: '[convex-svelte] convexLoadHydration needs SvelteKit 2.56 or later to detect universal ' +
-					'load functions. No convexLoad results are embedded.'
-	);
-}
-
-/**
- * SvelteKit `handle` that embeds `convexLoad()` / `convexLoadPaginated()`
- * results from universal load functions (`+page.ts`, `+layout.ts`) in the
- * server-rendered HTML.
+ * SvelteKit `handle` that lets `convexLoad()` / `convexLoadPaginated()` in
+ * universal load functions (`+page.ts`, `+layout.ts`) reuse the server's
+ * result during hydration.
  *
  * SvelteKit re-runs universal loads in the browser during hydration, before
- * `setupAuth()` has authenticated the client. With this handle, those loads
- * reuse the server's (authenticated) results instead of querying again — no
- * unauthenticated query, and no waiting for the WebSocket before the page is
- * interactive. Results of server loads (`+page.server.ts`) are never embedded;
- * the ones they return reach the browser through the transport hook.
+ * `setupAuth()` has authenticated the client. When a load passes its `fetch`
+ * to `convexLoad`, the server query goes through this handle's endpoint, and
+ * SvelteKit replays the response during hydration instead of the load querying
+ * Convex again. SvelteKit only does this for universal loads; server loads
+ * (`+page.server.ts`) reach the browser through the transport hook.
  *
- * Everything `convexLoad` fetches while a universal load runs is embedded —
- * including calls in helpers it invokes, but not in remote functions it calls.
- * Pass `{ hydrate: false }` for results that must not reach the browser.
- * Requires SvelteKit 2.56 or later.
- *
- * The payload replaces a `%convex.hydration%` placeholder, which must be in the
- * `<head>` of `src/app.html` (before SvelteKit's start script in `<body>`):
- *
- * ```html
- * <head>
- *   %sveltekit.head%
- *   %convex.hydration%
- * </head>
- * ```
+ * The endpoint runs Convex queries (never mutations or actions) with the token
+ * from `withServerConvexToken`, so place this handle after your auth handle.
  *
  * @example
  * ```ts
@@ -124,37 +39,109 @@ function checkMarkerSupport(): void {
  * import { withServerConvexToken } from 'convex-svelte/sveltekit/server';
  * import { convexLoadHydration } from 'convex-svelte/sveltekit/server/hydration';
  *
- * export const handle = sequence(convexLoadHydration, async ({ event, resolve }) => {
+ * const convexAuth: Handle = async ({ event, resolve }) => {
  *   const token = await getToken(event.cookies);
  *   return withServerConvexToken(token, () => resolve(event));
+ * };
+ *
+ * export const handle = sequence(convexAuth, convexLoadHydration);
+ *
+ * // +page.ts
+ * export const load = async ({ fetch }) => ({
+ *   tasks: await convexLoad(api.tasks.get, {}, { fetch })
  * });
  * ```
  */
-export const convexLoadHydration: Handle = ({ event, resolve }) => {
-	checkMarkerSupport();
-	const collector: HydrationCollector = new Map();
-	let replaced = false;
-	return collectorStorage.run(collector, () =>
-		resolve(event, {
-			transformPageChunk: ({ html, done }) => {
-				if (!replaced && html.includes(HYDRATION_PLACEHOLDER)) {
-					replaced = true;
-					return html.replace(HYDRATION_PLACEHOLDER, () => serializeHydrationPayload(collector));
-				}
-				if (done && !replaced && collector.size > 0) warnMissingPlaceholder();
-				return html;
-			}
-		})
-	);
-};
+// Typed structurally rather than as SvelteKit's `Handle`, which SvelteKit 2
+// exports from `@sveltejs/kit` and SvelteKit 3 from `@sveltejs/kit/hooks`; this
+// is assignable to `Handle` in both.
+export function convexLoadHydration<Event extends { url: URL; request: Request }>({
+	event,
+	resolve
+}: {
+	event: Event;
+	resolve: (event: Event) => Response | Promise<Response>;
+}): Response | Promise<Response> {
+	return event.url.pathname === HYDRATION_ENDPOINT ? handleQuery(event.request) : resolve(event);
+}
 
-let warnedMissingPlaceholder = false;
+/**
+ * Convex function names: `path/to/module:export`, or `path/to/module` for a
+ * default export. Segments are identifiers (no `.` or `..`), the module may end
+ * in `.js`.
+ */
+const FUNCTION_NAME = /^(?:[\w-]+\/)*[\w-]+(?:\.js)?(?::\w+)?$/;
 
-function warnMissingPlaceholder(): void {
-	if (!DEV || warnedMissingPlaceholder) return;
-	warnedMissingPlaceholder = true;
+async function handleQuery(request: Request): Promise<Response> {
+	if (request.method !== 'POST') {
+		return new Response('Method Not Allowed', { status: 405, headers: { allow: 'POST' } });
+	}
+	// SvelteKit's server-side fetch sends no Sec-Fetch-Site; a browser fetch from
+	// the app sends `same-origin`. Requests from other sites can't read the
+	// response anyway, but have no reason to reach the endpoint.
+	const site = request.headers.get('sec-fetch-site');
+	if (site !== null && site !== 'same-origin') {
+		return new Response('Forbidden', { status: 403 });
+	}
+
+	let name: string;
+	let args: Value;
+	try {
+		const body = (await request.json()) as Partial<HydrationRequestBody>;
+		if (typeof body.name !== 'string' || body.name.length > 300 || !FUNCTION_NAME.test(body.name)) {
+			throw new Error();
+		}
+		if (typeof body.args !== 'object' || body.args === null || Array.isArray(body.args)) {
+			throw new Error();
+		}
+		name = body.name;
+		args = jsonToConvex(body.args);
+	} catch {
+		return new Response('Bad Request', { status: 400 });
+	}
+
+	warnIfOutsideAuth();
+	const client = new ConvexHttpClient(getConvexUrl());
+	const token = _getServerToken();
+	if (token) client.setAuth(token);
+
+	let body: HydrationResponseBody;
+	try {
+		// `/api/query` only runs public query functions: Convex rejects
+		// mutations, actions and internal functions here.
+		const value = await client.query(makeFunctionReference<'query'>(name), args as never);
+		body = { value: convexToJson(value as Value) };
+	} catch (error) {
+		// Same information convexLoad would throw when querying directly.
+		body = {
+			error:
+				error instanceof ConvexError
+					? { message: error.message, data: convexToJson(error.data as Value) as JSONValue }
+					: { message: error instanceof Error ? error.message : String(error) }
+		};
+	}
+	// 200 also for query errors: SvelteKit replays the response either way, and
+	// convexLoad rethrows the error from the body.
+	return Response.json(body, {
+		headers: { 'cache-control': 'private, no-store' }
+	});
+}
+
+let warnedOutsideAuth = false;
+
+/**
+ * Dev only: the app uses `withServerConvexToken`, but this request runs
+ * outside it — the handle comes before the auth handle, so queries would run
+ * signed out.
+ */
+function warnIfOutsideAuth(): void {
+	if (!DEV || warnedOutsideAuth) return;
+	const context = _serverTokenContext();
+	if (context.inside || !context.used) return;
+	warnedOutsideAuth = true;
 	console.warn(
-		`[convex-svelte] convexLoadHydration: add ${HYDRATION_PLACEHOLDER} to the <head> of ` +
-			'src/app.html. Without it, no convexLoad results are embedded.'
+		'[convex-svelte] convexLoadHydration runs before withServerConvexToken, so its queries ' +
+			'run without auth. Place it after your auth handle: ' +
+			'`export const handle = sequence(convexAuth, convexLoadHydration)`.'
 	);
 }

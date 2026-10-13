@@ -22,11 +22,24 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { _setServerTokenGetter } from '../internal/singleton.js';
 
-const tokenStorage = new AsyncLocalStorage<string | undefined>();
+// The token is wrapped so "inside withServerConvexToken, signed out" (token
+// undefined) differs from "outside withServerConvexToken" (no store).
+const tokenStorage = new AsyncLocalStorage<{ token: string | undefined }>();
+let used = false;
 
 // Register the getter so convexLoad / createConvexHttpClient can access
 // the token without importing node:async_hooks themselves.
-_setServerTokenGetter(() => tokenStorage.getStore());
+_setServerTokenGetter(() => tokenStorage.getStore()?.token);
+
+/**
+ * Whether the current code runs inside `withServerConvexToken`, and whether the
+ * app uses it at all. Lets the `convexLoadHydration` endpoint detect a handle
+ * order in which it runs before the auth handle.
+ * @internal
+ */
+export function _serverTokenContext(): { inside: boolean; used: boolean } {
+	return { inside: tokenStorage.getStore() !== undefined, used };
+}
 
 /**
  * Store the auth token for the duration of `fn`, making it available to
@@ -43,5 +56,6 @@ _setServerTokenGetter(() => tokenStorage.getStore());
  * @returns The return value of `fn`.
  */
 export function withServerConvexToken<T>(token: string | undefined, fn: () => T): T {
-	return tokenStorage.run(token, fn);
+	used = true;
+	return tokenStorage.run({ token }, fn);
 }

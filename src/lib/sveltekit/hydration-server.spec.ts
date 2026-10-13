@@ -1,324 +1,269 @@
-import { describe, expect, it, vi } from 'vitest';
-import type { RequestEvent, ResolveOptions } from '@sveltejs/kit';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { RequestEvent } from '@sveltejs/kit';
 
 // ---------------------------------------------------------------------------
-// Tests for the convexLoadHydration handle together with the real server path
-// of convexLoad / convexLoadPaginated (SERVER environment, no document).
+// Tests for the convexLoadHydration endpoint (hydration-server.ts) and the
+// server path of convexLoad / convexLoadPaginated through it (SERVER
+// environment, no document). The endpoint runs Convex queries on the user's
+// behalf, so its input checks and response headers are part of the contract.
 // ---------------------------------------------------------------------------
 
-const { mockHttpClientQuery, kit } = vi.hoisted(() => {
+const { mockQuery, mockSetAuth, env } = vi.hoisted(() => {
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	delete (globalThis as any)['document'];
-	return {
-		mockHttpClientQuery: vi.fn(),
-		kit: { inUniversalLoad: true, inRemoteFunction: false }
-	};
+	return { mockQuery: vi.fn(), mockSetAuth: vi.fn(), env: { dev: true } };
 });
-
-// SvelteKit sets `state.is_in_universal_load` in the request store while a
-// universal load runs on the server, and `is_in_remote_function` inside a
-// remote function (which copies the caller's state); simulated here.
-vi.mock('@sveltejs/kit/internal/server', () => ({
-	try_get_request_store: () => ({
-		state: {
-			is_in_universal_load: kit.inUniversalLoad,
-			is_in_remote_function: kit.inRemoteFunction
-		}
-	})
-}));
 
 vi.mock('esm-env', async (importOriginal) => ({
 	...(await importOriginal<typeof import('esm-env')>()),
-	DEV: true
+	get DEV() {
+		return env.dev;
+	}
 }));
 
 vi.mock('convex/browser', () => ({
 	ConvexHttpClient: class {
-		query = mockHttpClientQuery;
-		setAuth() {}
+		query = mockQuery;
+		setAuth = mockSetAuth;
 	}
 }));
 
 vi.mock('../internal/singleton.js', async (importOriginal) => ({
 	...(await importOriginal<typeof import('../internal/singleton.js')>()),
-	getConvexUrl: () => 'https://test.convex.cloud',
-	_getServerToken: () => undefined
+	getConvexUrl: () => 'https://test.convex.cloud'
 }));
 
 // The real module needs SvelteKit's `$app/state`; unused on the server.
 vi.mock('./route-data.svelte.js', () => ({ createRouteQuery: vi.fn() }));
 
-import { makeFunctionReference } from 'convex/server';
+import { getFunctionName, makeFunctionReference } from 'convex/server';
+import { ConvexError, convexToJson } from 'convex/values';
 import { convexLoadHydration } from './hydration-server.js';
-import { convexLoad, convexLoadPaginated } from './transport.svelte.js';
+import { HYDRATION_ENDPOINT } from './hydration.js';
+import { withServerConvexToken } from './server-token.js';
+import { convexLoad, convexLoadPaginated, ConvexLoadResult } from './transport.svelte.js';
 
-const listRef = makeFunctionReference<'query'>('messages:list');
-const pageRef = makeFunctionReference<'query'>('messages:paginatedList');
-const TEMPLATE = '<html><head>%convex.hydration%</head><body><div>app</div></body></html>';
+const ORIGIN = 'http://localhost';
+
+/** Run a request through the handle; anything but the endpoint resolves to "page". */
+function handle(request: Request) {
+	return convexLoadHydration({
+		event: { url: new URL(request.url), request } as RequestEvent,
+		resolve: async () => new Response('page')
+	});
+}
+
+function queryRequest(body: unknown, init: RequestInit = {}) {
+	return new Request(`${ORIGIN}${HYDRATION_ENDPOINT}`, {
+		method: 'POST',
+		body: typeof body === 'string' ? body : JSON.stringify(body),
+		...init
+	});
+}
 
 /**
- * Run a request through the handle. `render` plays SvelteKit: it runs the
- * loads inside `resolve`, then the page HTML goes through transformPageChunk.
+ * Plays SvelteKit's server-side `fetch` in a universal load: a same-origin
+ * request goes through the app's handle chain (here: auth, then hydration).
  */
-async function renderPage(render: () => Promise<void>): Promise<string> {
-	let html = '';
-	await convexLoadHydration({
-		event: {} as RequestEvent,
-		resolve: async (_event: RequestEvent, options?: ResolveOptions) => {
-			await render();
-			html = (await options?.transformPageChunk?.({ html: TEMPLATE, done: true })) ?? TEMPLATE;
-			return new Response(html);
-		}
-	});
-	return html;
+function kitFetch(token: string | undefined): typeof globalThis.fetch {
+	return (async (input: RequestInfo | URL, init?: RequestInit) =>
+		withServerConvexToken(token, () =>
+			handle(new Request(new URL(String(input), ORIGIN), init))
+		)) as typeof globalThis.fetch;
 }
 
-/** Run code as a remote function called from a universal load. */
-async function remoteFunctionInUniversalLoad(fn: () => Promise<unknown>) {
-	kit.inRemoteFunction = true;
-	try {
-		await fn();
-	} finally {
-		kit.inRemoteFunction = false;
-	}
-}
+afterEach(() => {
+	mockQuery.mockReset();
+	mockSetAuth.mockReset();
+	vi.restoreAllMocks();
+	env.dev = true;
+});
 
-/** Run load code as a universal load (+page.ts) or as a server load (+page.server.ts). */
-async function universalLoad(fn: () => Promise<unknown>) {
-	kit.inUniversalLoad = true;
-	await fn();
-}
-async function serverLoad(fn: () => Promise<unknown>) {
-	kit.inUniversalLoad = false;
-	try {
-		await fn();
-	} finally {
-		kit.inUniversalLoad = true;
-	}
-}
+describe('convexLoadHydration — endpoint', () => {
+	it('passes every other path through to the app', async () => {
+		const response = await handle(new Request(`${ORIGIN}/some/page`));
 
-/** The embedded payload of a rendered page, or `undefined`. */
-function payloadOf(html: string): Record<string, unknown> | undefined {
-	const json = html.match(/<script [^>]*data-convex-load>(.*?)<\/script>/)?.[1];
-	return json === undefined ? undefined : (JSON.parse(json) as Record<string, unknown>);
-}
-
-describe('convexLoadHydration', () => {
-	it('embeds convexLoad results of universal loads, keyed by query and args', async () => {
-		mockHttpClientQuery.mockResolvedValueOnce([{ body: 'hi' }]);
-
-		const html = await renderPage(async () => {
-			await convexLoad(listRef, { muteWords: [] });
-		});
-
-		expect(payloadOf(html)).toEqual({ 'messages:list|{"muteWords":[]}': [{ body: 'hi' }] });
+		expect(await response.text()).toBe('page');
+		expect(mockQuery).not.toHaveBeenCalled();
 	});
 
-	it('embeds the first page of convexLoadPaginated, keyed with the page size', async () => {
-		const page = { page: [{ id: 1 }], isDone: false, continueCursor: 'c' };
-		mockHttpClientQuery.mockResolvedValueOnce(page);
+	it('runs the query with the token from withServerConvexToken', async () => {
+		mockQuery.mockResolvedValue({ count: 9007199254740993n });
 
-		const html = await renderPage(async () => {
-			await convexLoadPaginated(pageRef, { searchWords: [] }, { initialNumItems: 5 });
-		});
-
-		expect(payloadOf(html)).toEqual({
-			'paginated|messages:paginatedList|{"searchWords":[]}|5': page
-		});
-	});
-
-	it('does not embed results that are opted out with hydrate: false', async () => {
-		mockHttpClientQuery.mockResolvedValue([]);
-
-		const html = await renderPage(async () => {
-			await convexLoad(listRef, {}, { hydrate: false });
-			await convexLoadPaginated(pageRef, {}, { initialNumItems: 5, hydrate: false });
-		});
-
-		expect(payloadOf(html)).toBeUndefined();
-	});
-
-	it('never embeds server-load results, not even ones the load does not return', async () => {
-		// A +page.server.ts load may fetch private data and return only part of
-		// it (or a token-privileged result): that must never reach the HTML.
-		mockHttpClientQuery.mockResolvedValue({ displayName: 'Ada', email: 'private@example.com' });
-
-		const html = await renderPage(() =>
-			serverLoad(async () => {
-				const account = await convexLoad(listRef, { account: true });
-				void account.data?.displayName;
-				await convexLoadPaginated(pageRef, {}, { initialNumItems: 5 });
-			})
+		const response = await withServerConvexToken('jwt', () =>
+			handle(queryRequest({ name: 'messages:list', args: { a: 1 } }))
 		);
 
-		expect(payloadOf(html)).toBeUndefined();
-		expect(html).not.toContain('private@example.com');
+		expect(mockSetAuth).toHaveBeenCalledWith('jwt');
+		expect(getFunctionName(mockQuery.mock.calls[0][0])).toBe('messages:list');
+		expect(mockQuery.mock.calls[0][1]).toEqual({ a: 1 });
+		expect(await response.json()).toEqual({
+			value: convexToJson({ count: 9007199254740993n })
+		});
 	});
 
-	it('embeds a universal result even when a server load fetched the same query', async () => {
-		mockHttpClientQuery.mockResolvedValue(['same']);
+	it('marks responses as private and uncacheable', async () => {
+		mockQuery.mockResolvedValue(null);
 
-		const html = await renderPage(async () => {
-			await universalLoad(() => convexLoad(listRef, {}));
-			await serverLoad(() => convexLoad(listRef, {}));
+		const response = await handle(queryRequest({ name: 'messages:list', args: {} }));
+
+		expect(response.headers.get('cache-control')).toBe('private, no-store');
+	});
+
+	it('returns query errors in the body: ConvexError with its data, others with the message', async () => {
+		mockQuery.mockRejectedValueOnce(new ConvexError({ code: 'FORBIDDEN' }));
+		const convexError = await handle(queryRequest({ name: 'messages:list', args: {} }));
+		expect(await convexError.json()).toEqual({
+			error: { message: expect.any(String), data: { code: 'FORBIDDEN' } }
 		});
 
-		expect(payloadOf(html)).toEqual({ 'messages:list|{}': ['same'] });
-	});
-
-	it('keeps concurrent requests apart', async () => {
-		mockHttpClientQuery.mockImplementation(async (_ref, args: { request: string }) => {
-			await new Promise((resolve) => setTimeout(resolve, args.request === 'a' ? 20 : 0));
-			return args.request;
+		mockQuery.mockRejectedValueOnce(new Error('[Request ID: x] Server Error'));
+		const serverError = await handle(queryRequest({ name: 'messages:list', args: {} }));
+		expect(await serverError.json()).toEqual({
+			error: { message: '[Request ID: x] Server Error' }
 		});
-
-		const [a, b] = await Promise.all([
-			renderPage(async () => {
-				await convexLoad(listRef, { request: 'a' });
-			}),
-			renderPage(async () => {
-				await convexLoad(listRef, { request: 'b' });
-			})
-		]);
-
-		expect(payloadOf(a)).toEqual({ 'messages:list|{"request":"a"}': 'a' });
-		expect(payloadOf(b)).toEqual({ 'messages:list|{"request":"b"}': 'b' });
 	});
 
-	it('never embeds results fetched inside a remote function, even one a universal load calls', async () => {
-		mockHttpClientQuery.mockResolvedValueOnce({ secret: 'full result' });
-		mockHttpClientQuery.mockResolvedValueOnce(['public']);
+	it('only accepts POST', async () => {
+		const response = await handle(new Request(`${ORIGIN}${HYDRATION_ENDPOINT}`));
 
-		const html = await renderPage(async () => {
-			await universalLoad(async () => {
-				await remoteFunctionInUniversalLoad(() => convexLoad(listRef, { secret: true }));
-				await convexLoad(listRef, {});
-			});
-		});
-
-		expect(payloadOf(html)).toEqual({ 'messages:list|{}': ['public'] });
-		expect(html).not.toContain('full result');
+		expect(response.status).toBe(405);
+		expect(response.headers.get('allow')).toBe('POST');
 	});
 
-	it('replaces the %convex.hydration% placeholder in <head>', async () => {
-		mockHttpClientQuery.mockResolvedValueOnce([]);
+	it('rejects requests from other sites, but not same-origin ones or SvelteKit itself', async () => {
+		mockQuery.mockResolvedValue(null);
+		const body = { name: 'messages:list', args: {} };
 
-		const html = await renderPage(async () => {
-			await convexLoad(listRef, {});
-		});
-
-		expect(html).not.toContain('%convex.hydration%');
-		expect(html.indexOf('data-convex-load')).toBeLessThan(html.indexOf('</head>'));
-	});
-
-	it('removes the placeholder and embeds nothing when no results were collected', async () => {
-		const html = await renderPage(async () => {});
-
-		expect(html).toBe('<html><head></head><body><div>app</div></body></html>');
-	});
-
-	it('warns once in dev when app.html has no placeholder, and embeds nothing', async () => {
-		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-		mockHttpClientQuery.mockResolvedValue(['x']);
-		const template = '<html><head></head><body></body></html>';
-
-		for (let i = 0; i < 2; i++) {
-			await convexLoadHydration({
-				event: {} as RequestEvent,
-				resolve: async (_event: RequestEvent, options?: ResolveOptions) => {
-					await convexLoad(listRef, {});
-					const html = await options?.transformPageChunk?.({ html: template, done: true });
-					expect(html).toBe(template);
-					return new Response(html);
-				}
-			});
+		for (const site of ['cross-site', 'same-site', 'none']) {
+			const response = await handle(queryRequest(body, { headers: { 'sec-fetch-site': site } }));
+			expect(response.status).toBe(403);
 		}
-
-		expect(warn).toHaveBeenCalledOnce();
-		expect(warn.mock.calls[0][0]).toContain('%convex.hydration%');
-		warn.mockRestore();
-		mockHttpClientQuery.mockReset();
+		const sameOrigin = await handle(
+			queryRequest(body, { headers: { 'sec-fetch-site': 'same-origin' } })
+		);
+		expect(sameOrigin.status).toBe(200);
+		expect((await handle(queryRequest(body))).status).toBe(200);
 	});
 
-	it('does nothing outside the handle', async () => {
-		mockHttpClientQuery.mockResolvedValueOnce([]);
+	it.each([
+		['malformed JSON', '{not json'],
+		['a missing name', { args: {} }],
+		['a path-like name', { name: '../secrets:get', args: {} }],
+		['two colons', { name: 'a:b:c', args: {} }],
+		['args that are not an object', { name: 'messages:list', args: [1] }],
+		['missing args', { name: 'messages:list' }],
+		['args that are not Convex JSON', { name: 'messages:list', args: { x: { $weird: 1 } } }]
+	])('rejects %s with 400, without querying', async (_case, body) => {
+		const response = await handle(queryRequest(body));
 
-		// Without the handle, convexLoad still works; there is just no payload.
-		await expect(convexLoad(listRef, {})).resolves.toBeDefined();
+		expect(response.status).toBe(400);
+		expect(mockQuery).not.toHaveBeenCalled();
+	});
+
+	it('accepts module paths and default exports', async () => {
+		mockQuery.mockResolvedValue(null);
+
+		for (const name of ['folder/messages:list', 'messages']) {
+			const response = await handle(queryRequest({ name, args: {} }));
+			expect(response.status).toBe(200);
+		}
 	});
 });
 
-describe('convexLoadHydration — SvelteKit without the universal-load marker', () => {
-	it.each([
-		[
-			'older than 2.31 exports (accessor missing)',
-			{ try_get_request_store: undefined },
-			'SvelteKit 2.56'
-		],
-		[
-			'2.31–2.55 (store without the marker)',
-			{ try_get_request_store: () => ({ state: {} }) },
-			'SvelteKit 2.56'
-		],
-		[
-			'a store without the remote-function flag',
-			{ try_get_request_store: () => ({ state: { is_in_universal_load: false } }) },
-			'SvelteKit 2.56'
-		],
-		[
-			'SvelteKit 3 (no universal-load marker any more)',
-			{
-				try_get_request_store: () => ({
-					state: { is_in_remote_function: false, is_in_remote_query: false }
-				})
-			},
-			'SvelteKit 3'
-		],
-		[
-			'a throwing accessor',
-			{
-				try_get_request_store: () => {
-					throw new Error('internal error');
-				}
-			},
-			'SvelteKit 2.56'
-		]
-	])('embeds nothing (fail-safe) and warns once: %s', async (_name, internal, expected) => {
-		vi.resetModules();
-		vi.doMock('@sveltejs/kit/internal/server', () => internal);
-		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-		const { convexLoadHydration: handle } = await import('./hydration-server.js');
-		const transport = await import('./transport.svelte.js');
-		mockHttpClientQuery.mockResolvedValue(['x']);
+describe('convexLoad / convexLoadPaginated on the server with { fetch }', () => {
+	const listRef = makeFunctionReference<'query'>('messages:list');
+	const pageRef = makeFunctionReference<'query'>('messages:paginatedList');
 
-		let html = '';
-		for (let i = 0; i < 2; i++) {
-			await handle({
-				event: {} as RequestEvent,
-				resolve: async (_event: RequestEvent, options?: ResolveOptions) => {
-					await transport.convexLoad(listRef, {});
-					html = (await options?.transformPageChunk?.({ html: TEMPLATE, done: true })) ?? '';
-					return new Response(html);
-				}
-			});
-		}
+	it('queries through the endpoint with the request token, returning a transport result', async () => {
+		mockQuery.mockResolvedValue(['a', 'b']);
 
-		expect(payloadOf(html)).toBeUndefined();
-		expect(warn).toHaveBeenCalledOnce();
-		expect(warn.mock.calls[0][0]).toContain(expected);
-		warn.mockRestore();
-		vi.doUnmock('@sveltejs/kit/internal/server');
+		const result = await convexLoad(listRef, { channel: 'x' }, { fetch: kitFetch('jwt') });
+
+		expect(result).toBeInstanceOf(ConvexLoadResult);
+		expect(result.data).toEqual(['a', 'b']);
+		expect(mockQuery).toHaveBeenCalledOnce();
+		expect(mockQuery.mock.calls[0][1]).toEqual({ channel: 'x' });
+		expect(mockSetAuth).toHaveBeenCalledWith('jwt');
 	});
 
-	it('does not warn when the marker is present', async () => {
-		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-		mockHttpClientQuery.mockResolvedValueOnce([]);
+	it('rethrows the query error from the endpoint', async () => {
+		mockQuery.mockRejectedValue(new ConvexError('not allowed'));
 
-		await renderPage(async () => {
-			await convexLoad(listRef, {});
+		await expect(convexLoad(listRef, {}, { fetch: kitFetch('jwt') })).rejects.toBeInstanceOf(
+			ConvexError
+		);
+	});
+
+	it('sends the first page args, with the page size, for convexLoadPaginated', async () => {
+		const page = { page: [1], isDone: true, continueCursor: 'c' };
+		mockQuery.mockResolvedValue(page);
+
+		const result = await convexLoadPaginated(
+			pageRef,
+			{ q: '' },
+			{ initialNumItems: 5, fetch: kitFetch(undefined) }
+		);
+
+		expect(mockQuery.mock.calls[0][1]).toEqual({
+			q: '',
+			paginationOpts: { numItems: 5, cursor: null }
 		});
+		expect(result.results).toEqual([1]);
+	});
 
+	it('queries directly with an explicit token, bypassing fetch', async () => {
+		mockQuery.mockResolvedValue([]);
+		const fetch = vi.fn();
+
+		await convexLoad(listRef, {}, { fetch, token: 'explicit' });
+
+		expect(fetch).not.toHaveBeenCalled();
+		expect(mockSetAuth).toHaveBeenCalledWith('explicit');
+	});
+
+	it('queries directly when the handle is missing', async () => {
+		vi.spyOn(console, 'warn').mockImplementation(() => {});
+		mockQuery.mockResolvedValue(['direct']);
+		const fetchWithoutHandle = vi.fn(async () => new Response('Not Found', { status: 404 }));
+
+		const result = await convexLoad(listRef, {}, { fetch: fetchWithoutHandle });
+
+		expect(result.data).toEqual(['direct']);
+		expect(mockQuery).toHaveBeenCalledOnce();
+	});
+});
+
+// Last: it resets the module registry, which re-registers the server token getter.
+describe('convexLoadHydration — handle order (dev)', () => {
+	it('warns once when it runs outside withServerConvexToken although the app uses it', async () => {
+		vi.resetModules();
+		const { convexLoadHydration: freshHandle } = await import('./hydration-server.js');
+		const { withServerConvexToken: freshWithToken } = await import('./server-token.js');
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		mockQuery.mockResolvedValue(null);
+		const run = () =>
+			freshHandle({
+				event: {
+					url: new URL(`${ORIGIN}${HYDRATION_ENDPOINT}`),
+					request: queryRequest({ name: 'messages:list', args: {} })
+				} as RequestEvent,
+				resolve: async () => new Response('page')
+			});
+
+		// Before the app ever used withServerConvexToken: no auth in this app.
+		await run();
 		expect(warn).not.toHaveBeenCalled();
+
+		// Inside it: correct order.
+		await freshWithToken('jwt', run);
+		expect(warn).not.toHaveBeenCalled();
+
+		// Outside it, after the app used it: handle placed before the auth handle.
+		await run();
+		await run();
+		expect(warn).toHaveBeenCalledOnce();
+		expect(warn.mock.calls[0][0]).toContain('sequence(convexAuth, convexLoadHydration)');
 		warn.mockRestore();
 	});
 });
