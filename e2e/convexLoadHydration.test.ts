@@ -11,7 +11,9 @@ import { convexUrl, recordWebSocket, withMuteWord, type QueryEvent } from './hel
 // one live subscription each.
 // ---------------------------------------------------------------------------
 
-const ENDPOINT = '/__convex-svelte/query';
+// The endpoint is the page itself plus this marker.
+const MARKER = '__convex-svelte=query';
+const RECORDED = /data-sveltekit-fetched data-url="[^"]*\?__convex-svelte=query"/g;
 
 test.describe('convexLoad — hydration via fetch replay', () => {
 	test('SvelteKit records the endpoint responses of universal loads in the HTML', async ({
@@ -21,15 +23,13 @@ test.describe('convexLoad — hydration via fetch replay', () => {
 		const html = (await response?.text()) ?? '';
 
 		// One recorded response for the page's one universal convexLoad.
-		expect(html.match(/data-sveltekit-fetched data-url="\/__convex-svelte\/query"/g)).toHaveLength(
-			1
-		);
+		expect(html.match(RECORDED)).toHaveLength(1);
 	});
 
 	test('hydration makes no request to the endpoint', async ({ page }) => {
 		const requests: string[] = [];
 		page.on('request', (request) => {
-			if (request.url().includes(ENDPOINT)) requests.push(request.url());
+			if (request.url().includes(MARKER)) requests.push(request.url());
 		});
 		await page.goto('/tests/convex-load-nested');
 		await expect(page.getByTestId('hydrated')).toContainText('true', { timeout: 5000 });
@@ -43,7 +43,7 @@ test.describe('convexLoad — hydration via fetch replay', () => {
 		const html = (await response?.text()) ?? '';
 
 		// SvelteKit records no fetch of a server load…
-		expect(html).not.toContain(ENDPOINT);
+		expect(html).not.toContain(MARKER);
 		// …and a result the server load only used internally never appears.
 		expect(html).not.toContain('__e2e_server_private__');
 		// Still rendered from SSR and upgraded to a live subscription.
@@ -96,9 +96,7 @@ test.describe('convexLoad — hydration via fetch replay', () => {
 
 		// The universal layout and page loads: one recorded response each. The
 		// server layout's private result never appears.
-		expect(html.match(/data-sveltekit-fetched data-url="\/__convex-svelte\/query"/g)).toHaveLength(
-			2
-		);
+		expect(html.match(RECORDED)).toHaveLength(2);
 		expect(html).not.toContain('__e2e_nested_server_private__');
 
 		await expect(page.getByTestId('hydrated')).toContainText('true', { timeout: 5000 });

@@ -11,7 +11,7 @@ import { makeFunctionReference } from 'convex/server';
 import { ConvexError, convexToJson, jsonToConvex, type JSONValue, type Value } from 'convex/values';
 import { getConvexUrl, _getServerToken } from '../internal/singleton.js';
 import {
-	HYDRATION_ENDPOINT,
+	HYDRATION_PARAM,
 	type HydrationRequestBody,
 	type HydrationResponseBody
 } from './hydration.js';
@@ -62,8 +62,9 @@ export function convexLoadHydration<Event extends { url: URL; request: Request }
 	event: Event;
 	resolve: (event: Event) => Response | Promise<Response>;
 }): Response | Promise<Response> {
-	// Matched by suffix, so it works below any base path (`kit.paths.base`).
-	return event.url.pathname.endsWith(HYDRATION_ENDPOINT)
+	// A POST to any page with the marker (see HYDRATION_URL); everything else,
+	// including GETs with the marker, is the app's.
+	return event.request.method === 'POST' && event.url.searchParams.get(HYDRATION_PARAM) === 'query'
 		? handleQuery(event.request)
 		: resolve(event);
 }
@@ -76,8 +77,10 @@ export function convexLoadHydration<Event extends { url: URL; request: Request }
 const FUNCTION_NAME = /^(?:[\w-]+\/)*[\w-]+(?:\.js)?(?::\w+)?$/;
 
 async function handleQuery(request: Request): Promise<Response> {
-	if (request.method !== 'POST') {
-		return new Response('Method Not Allowed', { status: 405, headers: { allow: 'POST' } });
+	// convexLoad always sends JSON. Another site can't send this content type
+	// without a CORS preflight, so this also keeps cross-site requests out.
+	if (!request.headers.get('content-type')?.startsWith('application/json')) {
+		return new Response('Unsupported Media Type', { status: 415 });
 	}
 	// SvelteKit's server-side fetch sends no Sec-Fetch-Site; a browser fetch from
 	// the app sends `same-origin`. Requests from other sites can't read the

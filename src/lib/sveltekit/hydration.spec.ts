@@ -16,7 +16,7 @@ vi.mock('esm-env', () => ({
 }));
 
 import {
-	HYDRATION_ENDPOINT,
+	HYDRATION_URL,
 	_resetHydrationWarnings,
 	queryThroughHydration,
 	warnMissingFetch
@@ -42,13 +42,16 @@ afterEach(() => {
 });
 
 describe('queryThroughHydration', () => {
-	it('POSTs the function name and Convex JSON args to the endpoint', async () => {
+	it('POSTs the function name and Convex JSON args as JSON to the page-relative endpoint', async () => {
 		const fetch = endpointFetch({ value: null });
 
 		await queryThroughHydration(fetch, 'messages:list', { count: 9007199254740993n });
 
-		expect(fetch).toHaveBeenCalledWith(HYDRATION_ENDPOINT, {
+		// Relative to the page, so inside any base path, for page and data requests.
+		expect(HYDRATION_URL).toBe('?__convex-svelte=query');
+		expect(fetch).toHaveBeenCalledWith(HYDRATION_URL, {
 			method: 'POST',
+			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({
 				name: 'messages:list',
 				args: convexToJson({ count: 9007199254740993n })
@@ -130,38 +133,5 @@ describe('warnMissingFetch', () => {
 		warnMissingFetch('messages:list');
 
 		expect(warn).not.toHaveBeenCalled();
-	});
-});
-
-describe('queryThroughHydration — base path (kit.paths.base)', () => {
-	async function endpointUrlWith(pathsModule: Record<string, unknown>) {
-		vi.resetModules();
-		vi.doMock('$app/paths', () => pathsModule);
-		const hydration = await import('./hydration.js');
-		const fetch = vi.fn(async () => new Response(JSON.stringify({ value: null })));
-		await hydration.queryThroughHydration(fetch, 'messages:list', {});
-		vi.doUnmock('$app/paths');
-		return (fetch.mock.calls[0] as unknown[])[0];
-	}
-
-	it('uses resolve() where SvelteKit has it (2.26+ and 3)', async () => {
-		const url = await endpointUrlWith({
-			resolve: (path: string) => `/app${path}`,
-			asset: () => ''
-		});
-
-		expect(url).toBe('/app/__convex-svelte/query');
-	});
-
-	it('falls back to base on SvelteKit 2 before 2.26', async () => {
-		// `resolve: undefined` stands in for the missing export: vitest's module
-		// mocks throw on undefined exports, real module namespaces don't.
-		expect(await endpointUrlWith({ base: '/app', assets: '', resolve: undefined })).toBe(
-			'/app/__convex-svelte/query'
-		);
-		// Relative paths: SvelteKit makes base relative to the page during SSR.
-		expect(await endpointUrlWith({ base: '..', assets: '', resolve: undefined })).toBe(
-			'../__convex-svelte/query'
-		);
 	});
 });

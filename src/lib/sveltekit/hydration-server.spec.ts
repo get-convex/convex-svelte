@@ -39,11 +39,12 @@ vi.mock('./route-data.svelte.js', () => ({ createRouteQuery: vi.fn() }));
 import { getFunctionName, makeFunctionReference } from 'convex/server';
 import { ConvexError, convexToJson } from 'convex/values';
 import { convexLoadHydration } from './hydration-server.js';
-import { HYDRATION_ENDPOINT } from './hydration.js';
+import { HYDRATION_URL } from './hydration.js';
 import { withServerConvexToken } from './server-token.js';
 import { convexLoad, convexLoadPaginated, ConvexLoadResult } from './transport.svelte.js';
 
 const ORIGIN = 'http://localhost';
+const PAGE = `${ORIGIN}/some/page`;
 
 /** Run a request through the handle; anything but the endpoint resolves to "page". */
 function handle(request: Request) {
@@ -53,11 +54,11 @@ function handle(request: Request) {
 	});
 }
 
-function queryRequest(body: unknown, init: RequestInit = {}) {
-	return new Request(`${ORIGIN}${HYDRATION_ENDPOINT}`, {
+function queryRequest(body: unknown, headers: Record<string, string> = {}, page = PAGE) {
+	return new Request(`${page}${HYDRATION_URL}`, {
 		method: 'POST',
-		body: typeof body === 'string' ? body : JSON.stringify(body),
-		...init
+		headers: { 'content-type': 'application/json', ...headers },
+		body: typeof body === 'string' ? body : JSON.stringify(body)
 	});
 }
 
@@ -68,7 +69,8 @@ function queryRequest(body: unknown, init: RequestInit = {}) {
 function kitFetch(token: string | undefined): typeof globalThis.fetch {
 	return (async (input: RequestInfo | URL, init?: RequestInit) =>
 		withServerConvexToken(token, () =>
-			handle(new Request(new URL(String(input), ORIGIN), init))
+			// Relative URLs resolve against the page, like SvelteKit's fetch does.
+			handle(new Request(new URL(String(input), PAGE), init))
 		)) as typeof globalThis.fetch;
 }
 
@@ -80,10 +82,14 @@ afterEach(() => {
 });
 
 describe('convexLoadHydration — endpoint', () => {
-	it('passes every other path through to the app', async () => {
-		const response = await handle(new Request(`${ORIGIN}/some/page`));
-
-		expect(await response.text()).toBe('page');
+	it('passes everything else through to the app, also GETs with the marker', async () => {
+		for (const request of [
+			new Request(PAGE),
+			new Request(PAGE, { method: 'POST', body: 'form' }),
+			new Request(`${PAGE}${HYDRATION_URL}`)
+		]) {
+			expect(await (await handle(request)).text()).toBe('page');
+		}
 		expect(mockQuery).not.toHaveBeenCalled();
 	});
 
@@ -124,11 +130,18 @@ describe('convexLoadHydration — endpoint', () => {
 		});
 	});
 
-	it('only accepts POST', async () => {
-		const response = await handle(new Request(`${ORIGIN}${HYDRATION_ENDPOINT}`));
+	it('only accepts JSON (no simple cross-site request can send it)', async () => {
+		const response = await handle(
+			queryRequest(
+				{ name: 'messages:list', args: {} },
+				{
+					'content-type': 'text/plain;charset=UTF-8'
+				}
+			)
+		);
 
-		expect(response.status).toBe(405);
-		expect(response.headers.get('allow')).toBe('POST');
+		expect(response.status).toBe(415);
+		expect(mockQuery).not.toHaveBeenCalled();
 	});
 
 	it('rejects requests from other sites, but not same-origin ones or SvelteKit itself', async () => {
@@ -136,12 +149,10 @@ describe('convexLoadHydration — endpoint', () => {
 		const body = { name: 'messages:list', args: {} };
 
 		for (const site of ['cross-site', 'same-site', 'none']) {
-			const response = await handle(queryRequest(body, { headers: { 'sec-fetch-site': site } }));
+			const response = await handle(queryRequest(body, { 'sec-fetch-site': site }));
 			expect(response.status).toBe(403);
 		}
-		const sameOrigin = await handle(
-			queryRequest(body, { headers: { 'sec-fetch-site': 'same-origin' } })
-		);
+		const sameOrigin = await handle(queryRequest(body, { 'sec-fetch-site': 'same-origin' }));
 		expect(sameOrigin.status).toBe(200);
 		expect((await handle(queryRequest(body))).status).toBe(200);
 	});
@@ -161,17 +172,13 @@ describe('convexLoadHydration — endpoint', () => {
 		expect(mockQuery).not.toHaveBeenCalled();
 	});
 
-	it('serves the endpoint below a base path (kit.paths.base)', async () => {
+	it('serves the endpoint on any page, also below a base path (kit.paths.base)', async () => {
 		mockQuery.mockResolvedValue(['x']);
 
-		const response = await handle(
-			new Request(`${ORIGIN}/app${HYDRATION_ENDPOINT}`, {
-				method: 'POST',
-				body: JSON.stringify({ name: 'messages:list', args: {} })
-			})
-		);
-
-		expect(await response.json()).toEqual({ value: ['x'] });
+		for (const page of [`${ORIGIN}/`, `${ORIGIN}/app`, `${ORIGIN}/app/tasks/`]) {
+			const response = await handle(queryRequest({ name: 'messages:list', args: {} }, {}, page));
+			expect(await response.json()).toEqual({ value: ['x'] });
+		}
 	});
 
 	it('accepts module paths and default exports', async () => {
@@ -258,7 +265,7 @@ describe('convexLoadHydration — handle order (dev)', () => {
 		const run = () =>
 			freshHandle({
 				event: {
-					url: new URL(`${ORIGIN}${HYDRATION_ENDPOINT}`),
+					url: new URL(`${PAGE}${HYDRATION_URL}`),
 					request: queryRequest({ name: 'messages:list', args: {} })
 				} as RequestEvent,
 				resolve: async () => new Response('page')
