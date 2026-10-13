@@ -164,8 +164,9 @@ describe('convexLoadHydration — endpoint', () => {
 	it.each([
 		['malformed JSON', '{not json'],
 		['a missing name', { args: {} }],
-		['a path-like name', { name: '../secrets:get', args: {} }],
+		['a .. path component', { name: '../secrets:get', args: {} }],
 		['two colons', { name: 'a:b:c', args: {} }],
+		['a hyphen, which Convex rejects', { name: 'my-module:list', args: {} }],
 		['args that are not an object', { name: 'messages:list', args: [1] }],
 		['missing args', { name: 'messages:list' }],
 		['args that are not Convex JSON', { name: 'messages:list', args: { x: { $weird: 1 } } }]
@@ -206,7 +207,7 @@ describe('convexLoadHydration — endpoint', () => {
 	it('accepts module paths and default exports', async () => {
 		mockQuery.mockResolvedValue(null);
 
-		for (const name of ['folder/messages:list', 'messages']) {
+		for (const name of ['folder/messages:list', 'messages', 'api.v1/messages.js:list']) {
 			const response = await handle(queryRequest({ name, args: {} }));
 			expect(response.status).toBe(200);
 		}
@@ -286,6 +287,16 @@ describe('convexLoad / convexLoadPaginated on the server with { fetch }', () => 
 
 		expect(fetch).not.toHaveBeenCalled();
 		expect(mockSetAuth).toHaveBeenCalledWith('explicit');
+	});
+
+	it("keeps token: '' signed out, also inside withServerConvexToken", async () => {
+		mockQuery.mockResolvedValue([]);
+		const fetch = vi.fn();
+
+		await withServerConvexToken('ambient', () => convexLoad(listRef, {}, { fetch, token: '' }));
+
+		expect(fetch).not.toHaveBeenCalled();
+		expect(mockSetAuth).not.toHaveBeenCalled();
 	});
 
 	it('queries directly when the handle is missing', async () => {

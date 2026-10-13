@@ -79,10 +79,18 @@ export function convexLoadHydration<Event extends { url: URL; request: Request }
 
 /**
  * Convex function names: `path/to/module:export`, or `path/to/module` for a
- * default export. Segments are identifiers (no `.` or `..`), the module may end
- * in `.js`.
+ * default export. Same grammar as Convex: path components of letters, digits,
+ * `_` and `.` with at least one letter or digit, up to 64 characters each.
+ * Convex validates the name again; this only turns away garbage early.
  */
-const FUNCTION_NAME = /^(?:[\w-]+\/)*[\w-]+(?:\.js)?(?::\w+)?$/;
+function isFunctionName(name: string): boolean {
+	const [module, exportName, ...rest] = name.split(':');
+	return (
+		rest.length === 0 &&
+		module.split('/').every((part) => /^[\w.]{1,64}$/.test(part) && /[a-z0-9]/i.test(part)) &&
+		(exportName === undefined || /^\w{1,64}$/.test(exportName))
+	);
+}
 
 async function handleQuery(request: Request): Promise<Response> {
 	// convexLoad always sends JSON. Another site can't send this content type
@@ -102,7 +110,7 @@ async function handleQuery(request: Request): Promise<Response> {
 	let args: Value;
 	try {
 		const body = (await request.json()) as Partial<HydrationRequestBody>;
-		if (typeof body.name !== 'string' || body.name.length > 300 || !FUNCTION_NAME.test(body.name)) {
+		if (typeof body.name !== 'string' || !isFunctionName(body.name)) {
 			throw new Error();
 		}
 		if (typeof body.args !== 'object' || body.args === null || Array.isArray(body.args)) {

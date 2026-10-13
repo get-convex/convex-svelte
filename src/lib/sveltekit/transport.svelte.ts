@@ -106,8 +106,8 @@ export async function convexLoad<Query extends FunctionReference<'query'>>(
 
 	const name = getFunctionName(ref);
 	// Through the endpoint so SvelteKit can replay it, unless an explicit token
-	// asks for a direct query.
-	const viaFetch = options?.fetch && !options.token ? options.fetch : undefined;
+	// (also '' for signed out) asks for a direct query.
+	const viaFetch = options?.token === undefined ? options?.fetch : undefined;
 
 	if (IS_BROWSER) {
 		if (isInitialHydration()) {
@@ -302,7 +302,7 @@ export async function convexLoadPaginated<Query extends FunctionReference<'query
 	}
 	const keepAlive = options.keepAlive ?? true;
 	const name = getFunctionName(ref);
-	const viaFetch = options.fetch && !options.token ? options.fetch : undefined;
+	const viaFetch = options.token === undefined ? options.fetch : undefined;
 	// The first page's args, identical on the server and in the browser.
 	const fullArgs = {
 		...args,
