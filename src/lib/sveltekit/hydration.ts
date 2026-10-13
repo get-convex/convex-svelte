@@ -15,10 +15,33 @@
  * This module is universal; the endpoint lives in `hydration-server.ts`.
  */
 import { DEV } from 'esm-env';
+import * as paths from '$app/paths';
 import { ConvexError, convexToJson, jsonToConvex, type JSONValue, type Value } from 'convex/values';
 
-/** Path of the endpoint the `convexLoadHydration` handle serves. */
+/**
+ * Path of the endpoint the `convexLoadHydration` handle serves, below the
+ * app's base path (`kit.paths.base`). The handle matches it by this suffix.
+ */
 export const HYDRATION_ENDPOINT = '/__convex-svelte/query';
+
+/**
+ * URL of the endpoint under the app's base path. Must be inside the base path:
+ * SvelteKit's server-side fetch only routes requests there through the app
+ * (handle, cookies, recording for replay).
+ *
+ * On the server with relative paths (SvelteKit's default) this is relative
+ * to the page, in the browser absolute. Both resolve to the same path, which
+ * is what SvelteKit records and matches for the replay.
+ */
+function endpointUrl(): string {
+	// SvelteKit 2.26+ and 3 have resolve(); SvelteKit 2 before 2.26 only base,
+	// and SvelteKit 3 no longer exports base. Each export is missing in some
+	// supported version, so read them dynamically rather than importing them.
+	const resolve = Reflect.get(paths, 'resolve') as ((path: string) => string) | undefined;
+	if (typeof resolve === 'function') return resolve(HYDRATION_ENDPOINT);
+	const base = Reflect.get(paths, 'base') as string | undefined;
+	return `${base ?? ''}${HYDRATION_ENDPOINT}`;
+}
 
 /** SvelteKit's `fetch` from the load event. */
 export type LoadFetch = typeof globalThis.fetch;
@@ -47,7 +70,7 @@ export async function queryThroughHydration(
 	args: Record<string, unknown>
 ): Promise<{ value: Value } | undefined> {
 	const body: HydrationRequestBody = { name: functionName, args: convexToJson(args as Value) };
-	const response = await fetch(HYDRATION_ENDPOINT, {
+	const response = await fetch(endpointUrl(), {
 		method: 'POST',
 		body: JSON.stringify(body)
 	});

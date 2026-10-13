@@ -62,7 +62,10 @@ export function convexLoadHydration<Event extends { url: URL; request: Request }
 	event: Event;
 	resolve: (event: Event) => Response | Promise<Response>;
 }): Response | Promise<Response> {
-	return event.url.pathname === HYDRATION_ENDPOINT ? handleQuery(event.request) : resolve(event);
+	// Matched by suffix, so it works below any base path (`kit.paths.base`).
+	return event.url.pathname.endsWith(HYDRATION_ENDPOINT)
+		? handleQuery(event.request)
+		: resolve(event);
 }
 
 /**

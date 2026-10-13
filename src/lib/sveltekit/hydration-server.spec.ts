@@ -161,6 +161,19 @@ describe('convexLoadHydration — endpoint', () => {
 		expect(mockQuery).not.toHaveBeenCalled();
 	});
 
+	it('serves the endpoint below a base path (kit.paths.base)', async () => {
+		mockQuery.mockResolvedValue(['x']);
+
+		const response = await handle(
+			new Request(`${ORIGIN}/app${HYDRATION_ENDPOINT}`, {
+				method: 'POST',
+				body: JSON.stringify({ name: 'messages:list', args: {} })
+			})
+		);
+
+		expect(await response.json()).toEqual({ value: ['x'] });
+	});
+
 	it('accepts module paths and default exports', async () => {
 		mockQuery.mockResolvedValue(null);
 
