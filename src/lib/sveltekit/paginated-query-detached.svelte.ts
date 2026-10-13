@@ -24,6 +24,7 @@ import {
 import { markRouteQuery, type SubscriptionHandle } from './query-lifecycle.js';
 import { paginatedQueryKey } from './query-key.js';
 import { createRouteQuery } from './route-data.svelte.js';
+import { subscribePaginated, type PaginatedSnapshot } from '../shared/paginated_subscription.js';
 import type { DetachedQueryOptions } from './query-detached.svelte.js';
 
 export type DetachedPaginatedQueryResult<Query extends FunctionReference<'query'>> = {
@@ -129,11 +130,7 @@ export function openDetachedPaginatedQuery<Query extends FunctionReference<'quer
 			subscriptionGeneration === generation && loadMore(numItems);
 		// Convex reports `LoadingFirstPage` (with no results) until the first
 		// page arrived — only then is there a first value to hand to the load.
-		const onSnapshot = (current: {
-			results: unknown[];
-			status: PaginationStatus;
-			loadMore: (numItems: number) => boolean;
-		}) => {
+		const onSnapshot = (current: PaginatedSnapshot) => {
 			machine.onUpdate({
 				results: current.results as PageItem<Query>[],
 				status: current.status,
@@ -141,26 +138,34 @@ export function openDetachedPaginatedQuery<Query extends FunctionReference<'quer
 			});
 			if (current.status !== 'LoadingFirstPage') settleFirstValue?.();
 		};
-
-		// Create subscription
-		const subscription = client.onPaginatedUpdate_experimental(
-			query,
-			args,
-			{ initialNumItems: options.initialNumItems },
-			() => {
-				const current = subscription.getCurrentValue?.();
-				if (current) onSnapshot(current);
-			},
-			(e: Error) => {
-				machine.onError(e);
-				settleFirstValue?.(e);
+		const onError = (e: Error) => {
+			if (subscriptionGeneration !== generation) return;
+			if (machine.onError(e)) {
+				// InvalidCursor: the machine reset pagination (once). Start over with
+				// a fresh subscription; a load keeps waiting for its first page.
+				queueMicrotask(restart);
+				return;
 			}
-		);
-		unsubscribe = subscription;
+			settleFirstValue?.(e);
+		};
 
-		// Check for synchronously available cached value
-		const current = subscription.getCurrentValue?.();
-		if (current) onSnapshot(current);
+		unsubscribe = subscribePaginated(
+			client,
+			query,
+			args as FunctionArgs<Query>,
+			options.initialNumItems,
+			onSnapshot,
+			onError
+		);
+	};
+
+	/** Replace the subscription with a fresh one, e.g. after an InvalidCursor reset. */
+	const restart = () => {
+		if (!wanted || !unsubscribe) return;
+		generation += 1;
+		unsubscribe();
+		unsubscribe = undefined;
+		subscribe();
 	};
 
 	const handle: SubscriptionHandle = {
