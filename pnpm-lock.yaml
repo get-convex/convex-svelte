@@ -51,6 +51,9 @@ importers:
       convex:
         specifier: 1.41.0
         version: 1.41.0
+      devalue:
+        specifier: ^5.8.1
+        version: 5.8.1
       eslint:
         specifier: ^10.4.1
         version: 10.4.1(jiti@2.7.0)
