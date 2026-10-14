@@ -93,15 +93,7 @@ export async function convexLoad<Query extends FunctionReference<'query'>>(
 	args: FunctionArgs<Query> | 'skip',
 	options?: { fetch?: LoadFetch; token?: string; keepAlive?: boolean }
 ): Promise<DetachedQueryResult<Query>> {
-	if (args === 'skip') {
-		return {
-			data: undefined,
-			isLoading: false,
-			error: undefined,
-			isStale: false,
-			dispose: () => {}
-		} as DetachedQueryResult<Query>;
-	}
+	if (args === 'skip') return skippedQuery() as DetachedQueryResult<Query>;
 	const keepAlive = options?.keepAlive ?? true;
 
 	const name = getFunctionName(ref);
@@ -162,6 +154,40 @@ export async function convexLoad<Query extends FunctionReference<'query'>>(
 	return result as unknown as DetachedQueryResult<Query>;
 }
 
+// Results of skipped queries. They carry functions (`dispose`, `loadMore`),
+// which SvelteKit can't serialize, so the transport sends them as
+// `{ skip: true }` and the browser recreates them.
+const skippedQueries = new WeakSet<object>();
+const skippedPaginatedQueries = new WeakSet<object>();
+
+function skippedQuery() {
+	const result = {
+		data: undefined,
+		isLoading: false,
+		error: undefined,
+		isStale: false,
+		dispose: () => {}
+	};
+	skippedQueries.add(result);
+	return result;
+}
+
+function skippedPaginatedQuery() {
+	const result = {
+		results: [],
+		status: 'Exhausted' as const,
+		isLoading: false,
+		error: undefined,
+		loadMore: () => false,
+		dispose: () => {}
+	};
+	skippedPaginatedQueries.add(result);
+	return result;
+}
+
+/** Encoded form of a skipped query. */
+type EncodedSkip = { skip: true };
+
 /**
  * Encode a `ConvexLoadResult` for serialization across the SSR boundary.
  * Use in SvelteKit's `transport` hook (`hooks.ts`).
@@ -181,7 +207,12 @@ export async function convexLoad<Query extends FunctionReference<'query'>>(
  */
 export function encodeConvexLoad(
 	value: unknown
-): false | { refName: string; args: Record<string, unknown>; data: unknown; keepAlive: boolean } {
+):
+	| false
+	| EncodedSkip
+	| { refName: string; args: Record<string, unknown>; data: unknown; keepAlive: boolean } {
+	if (typeof value === 'object' && value !== null && skippedQueries.has(value))
+		return { skip: true };
 	if (
 		value instanceof ConvexLoadResult ||
 		(value != null && typeof value === 'object' && '__convexLoad' in value)
@@ -196,12 +227,17 @@ export function encodeConvexLoad(
  * Decode a serialized `ConvexLoadResult` into a live query subscription.
  * Uses `createDetachedQuery` — works outside component context (transport.decode).
  */
-export function decodeConvexLoad(encoded: {
-	refName: string;
-	args: Record<string, unknown>;
-	data: unknown;
-	keepAlive?: boolean;
-}): DetachedQueryResult<FunctionReference<'query'>> {
+export function decodeConvexLoad(
+	encoded:
+		| EncodedSkip
+		| {
+				refName: string;
+				args: Record<string, unknown>;
+				data: unknown;
+				keepAlive?: boolean;
+		  }
+): DetachedQueryResult<FunctionReference<'query'>> {
+	if ('skip' in encoded) return skippedQuery() as DetachedQueryResult<FunctionReference<'query'>>;
 	const ref = makeFunctionReference<'query'>(encoded.refName);
 	return createDetachedQuery(ref, encoded.args, encoded.data, {
 		scope: 'route',
@@ -290,16 +326,7 @@ export async function convexLoadPaginated<Query extends FunctionReference<'query
 	args: WithoutPaginationOpts<FunctionArgs<Query>> | 'skip',
 	options: { initialNumItems: number; fetch?: LoadFetch; token?: string; keepAlive?: boolean }
 ): Promise<DetachedPaginatedQueryResult<Query>> {
-	if (args === 'skip') {
-		return {
-			results: [],
-			status: 'Exhausted',
-			isLoading: false,
-			error: undefined,
-			loadMore: () => false,
-			dispose: () => {}
-		} as DetachedPaginatedQueryResult<Query>;
-	}
+	if (args === 'skip') return skippedPaginatedQuery() as DetachedPaginatedQueryResult<Query>;
 	const keepAlive = options.keepAlive ?? true;
 	const name = getFunctionName(ref);
 	const viaFetch = options.token === undefined ? options.fetch : undefined;
@@ -388,6 +415,7 @@ export async function convexLoadPaginated<Query extends FunctionReference<'query
  */
 export function encodeConvexLoadPaginated(value: unknown):
 	| false
+	| EncodedSkip
 	| {
 			refName: string;
 			args: Record<string, unknown>;
@@ -395,6 +423,9 @@ export function encodeConvexLoadPaginated(value: unknown):
 			data: unknown;
 			keepAlive: boolean;
 	  } {
+	if (typeof value === 'object' && value !== null && skippedPaginatedQueries.has(value)) {
+		return { skip: true };
+	}
 	if (
 		value instanceof ConvexLoadPaginatedResult ||
 		(value != null && typeof value === 'object' && '__convexLoadPaginated' in value)
@@ -415,13 +446,20 @@ export function encodeConvexLoadPaginated(value: unknown):
  * Decode a serialized `ConvexLoadPaginatedResult` into a live paginated subscription.
  * Uses `createDetachedPaginatedQuery` — works outside component context (transport.decode).
  */
-export function decodeConvexLoadPaginated(encoded: {
-	refName: string;
-	args: Record<string, unknown>;
-	initialNumItems: number;
-	data: unknown;
-	keepAlive?: boolean;
-}): DetachedPaginatedQueryResult<FunctionReference<'query'>> {
+export function decodeConvexLoadPaginated(
+	encoded:
+		| EncodedSkip
+		| {
+				refName: string;
+				args: Record<string, unknown>;
+				initialNumItems: number;
+				data: unknown;
+				keepAlive?: boolean;
+		  }
+): DetachedPaginatedQueryResult<FunctionReference<'query'>> {
+	if ('skip' in encoded) {
+		return skippedPaginatedQuery() as DetachedPaginatedQueryResult<FunctionReference<'query'>>;
+	}
 	const ref = makeFunctionReference<'query'>(encoded.refName);
 	return createDetachedPaginatedQuery(ref, encoded.args, {
 		initialNumItems: encoded.initialNumItems,

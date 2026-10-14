@@ -42,7 +42,16 @@ import { convexLoadHydration } from './hydration-server.js';
 import { queryThroughHydration } from './hydration.js';
 
 import { withServerConvexToken } from './server-token.js';
-import { convexLoad, convexLoadPaginated, ConvexLoadResult } from './transport.svelte.js';
+import {
+	convexLoad,
+	convexLoadPaginated,
+	ConvexLoadResult,
+	decodeConvexLoad,
+	decodeConvexLoadPaginated,
+	encodeConvexLoad,
+	encodeConvexLoadPaginated
+} from './transport.svelte.js';
+import { parse, stringify } from 'devalue';
 
 const ORIGIN = 'http://localhost';
 const PAGE = `${ORIGIN}/some/page`;
@@ -297,6 +306,30 @@ describe('convexLoad / convexLoadPaginated on the server with { fetch }', () => 
 
 		expect(fetch).not.toHaveBeenCalled();
 		expect(mockSetAuth).not.toHaveBeenCalled();
+	});
+
+	it('sends skipped results to the browser like SvelteKit serializes server load data', async () => {
+		const data = {
+			user: await convexLoad(listRef, 'skip'),
+			messages: await convexLoadPaginated(pageRef, 'skip', { initialNumItems: 5 })
+		};
+
+		// SvelteKit runs the transport's encode as devalue reducers on the server
+		// and its decode as revivers in the browser.
+		const sent = stringify(data, {
+			ConvexLoadResult: encodeConvexLoad,
+			ConvexLoadPaginatedResult: encodeConvexLoadPaginated
+		});
+		const received = parse(sent, {
+			ConvexLoadResult: decodeConvexLoad,
+			ConvexLoadPaginatedResult: decodeConvexLoadPaginated
+		});
+
+		expect(received.user).toMatchObject({ data: undefined, isLoading: false, isStale: false });
+		received.user.dispose();
+		expect(received.messages).toMatchObject({ results: [], status: 'Exhausted', isLoading: false });
+		expect(received.messages.loadMore(10)).toBe(false);
+		expect(mockQuery).not.toHaveBeenCalled();
 	});
 
 	it('queries directly when the handle is missing', async () => {
