@@ -1,241 +1,209 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ConvexError, convexToJson } from 'convex/values';
 
 // ---------------------------------------------------------------------------
-// Tests for the convexLoad SSR hydration payload (hydration.ts).
-//
-// The server embeds convexLoad results of universal loads in the HTML; loads
-// re-running during the initial hydration reuse them instead of querying the
-// not-yet-authenticated client. Covers serialization safety (XSS), exact
-// round-tripping of Convex values, and that the payload is only ever used
-// for the initial hydration.
+// Tests for the client side of convexLoad hydration (hydration.ts): the
+// request convexLoad sends through the load's fetch, and how it reads the
+// endpoint's response. The request must be identical on the server and in the
+// browser, so SvelteKit can replay the server's response during hydration.
 // ---------------------------------------------------------------------------
 
-const env = vi.hoisted(() => ({ dev: false }));
+const env = vi.hoisted(() => ({ dev: true }));
 vi.mock('esm-env', () => ({
 	get DEV() {
 		return env.dev;
-	},
-	BROWSER: false
+	}
 }));
 
-type Hydration = typeof import('./hydration.js');
-type Singleton = typeof import('../internal/singleton.js');
+import {
+	HYDRATION_PATHNAME,
+	_resetHydrationWarnings,
+	queryThroughHydration,
+	warnMissingFetch
+} from './hydration.js';
 
-/** Fresh module instances: the singleton's "first flush happened" flag is permanent. */
-async function loadModules(): Promise<{ hydration: Hydration; singleton: Singleton }> {
-	vi.resetModules();
-	const hydration = await import('./hydration.js');
-	const singleton = await import('../internal/singleton.js');
-	return { hydration, singleton };
+/**
+ * A load fetch that answers like the endpoint, or like SvelteKit without the
+ * handle (a 404 page). Like a response SvelteKit replays, it has no headers.
+ */
+function endpointFetch(body: unknown, { handle = true } = {}) {
+	return vi.fn(
+		async () =>
+			new Response(handle ? JSON.stringify(body) : '<!doctype html><h1>404</h1>', {
+				status: handle ? 200 : 404
+			})
+	);
 }
-
-/** A collector with one recorded result per entry. */
-function collectorWith(hydration: Hydration, entries: Record<string, unknown>) {
-	const collector: import('./hydration.js').HydrationCollector = new Map();
-	hydration._setHydrationCollectorGetter(() => collector);
-	for (const [key, value] of Object.entries(entries)) {
-		hydration.recordForHydration(key, value);
-	}
-	return collector;
-}
-
-/** The JSON text inside the `<script>` element, as the browser would see it. */
-function scriptText(script: string): string {
-	const match = script.match(/^<script type="application\/json" data-convex-load>(.*)<\/script>$/s);
-	if (!match) throw new Error(`Unexpected payload markup: ${script}`);
-	return match[1];
-}
-
-/** Simulate the browser document containing (or not) the payload element. */
-function installDocument(text: string | null) {
-	const element = text === null ? null : { textContent: text, remove: vi.fn() };
-	globalThis.document = {
-		querySelector: vi.fn(() => element)
-	} as unknown as Document;
-	return element;
-}
-
-beforeEach(() => {
-	env.dev = false;
-	delete (globalThis as { document?: Document }).document;
-});
 
 afterEach(() => {
-	delete (globalThis as { document?: Document }).document;
+	env.dev = true;
+	_resetHydrationWarnings();
+	vi.restoreAllMocks();
 });
 
-describe('serializeHydrationPayload — server', () => {
-	it('emits nothing when nothing was recorded (e.g. ssr = false)', async () => {
-		const { hydration } = await loadModules();
+describe('queryThroughHydration', () => {
+	it('POSTs the function name and Convex JSON args as JSON to the endpoint', async () => {
+		const fetch = endpointFetch({ value: null });
 
-		expect(hydration.serializeHydrationPayload(new Map())).toBe('');
+		await queryThroughHydration(fetch, 'messages:list', { count: 9007199254740993n });
+
+		expect(fetch).toHaveBeenCalledWith(expect.stringMatching(HYDRATION_PATHNAME), {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({
+				name: 'messages:list',
+				args: convexToJson({ count: 9007199254740993n })
+			})
+		});
 	});
 
-	it('cannot be broken out of: no raw "<" inside the script element', async () => {
-		const { hydration } = await loadModules();
-		const collector = collectorWith(hydration, {
-			'messages:list|{}': [
-				{ body: '</script><script>alert(1)</script>' },
-				{ body: '<!-- <script>' },
-				{ body: 'line\u2028separator\u2029' }
-			]
+	it('sends the identical request every time (what SvelteKit matches for the replay)', async () => {
+		const fetch = endpointFetch({ value: null });
+
+		await queryThroughHydration(fetch, 'messages:list', { a: 1, b: [true] });
+		await queryThroughHydration(fetch, 'messages:list', { a: 1, b: [true] });
+
+		expect(fetch.mock.calls[0]).toEqual(fetch.mock.calls[1]);
+	});
+
+	it('gives every query and args its own pathname (prerendering writes one file per path)', async () => {
+		const fetch = endpointFetch({ value: null });
+
+		await queryThroughHydration(fetch, 'messages:list', { a: 1 });
+		await queryThroughHydration(fetch, 'messages:list', { a: 2 });
+		await queryThroughHydration(fetch, 'users:get', { a: 1 });
+		await queryThroughHydration(fetch, 'messages:list', { a: 1 });
+
+		const urls = fetch.mock.calls.map((call) => (call as unknown[])[0]);
+		expect(new Set(urls.slice(0, 3)).size).toBe(3);
+		expect(urls[3]).toBe(urls[0]);
+		for (const url of urls) expect(url).toMatch(/^\/__convex-svelte\/q\/[0-9a-z]+$/);
+	});
+
+	it('gives the same query on another page another pathname (prerendered pages write files)', async () => {
+		const fetch = endpointFetch({ value: null });
+
+		vi.stubGlobal('location', { pathname: '/prerendered' });
+		await queryThroughHydration(fetch, 'messages:list', { a: 1 });
+		vi.stubGlobal('location', { pathname: '/dynamic' });
+		await queryThroughHydration(fetch, 'messages:list', { a: 1 });
+		vi.unstubAllGlobals();
+
+		const [first, second] = fetch.mock.calls.map((call) => (call as unknown[])[0]);
+		expect(first).not.toBe(second);
+	});
+
+	it('queries directly (returns undefined) when the request fails, e.g. a network error', async () => {
+		vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const failing = vi.fn(async () => {
+			throw new TypeError('fetch failed');
 		});
 
-		const script = hydration.serializeHydrationPayload(collector);
-		const text = scriptText(script);
-
-		expect(text).not.toContain('<');
-		expect(text).not.toContain('\u2028');
-		expect(text).not.toContain('\u2029');
-		// Only the element's own closing tag.
-		expect(script.match(/<\/script/g)).toHaveLength(1);
+		await expect(queryThroughHydration(failing, 'messages:list', {})).resolves.toBeUndefined();
 	});
 
-	it('does not record undefined results or record outside a request scope', async () => {
-		const { hydration } = await loadModules();
-		expect(() => hydration.recordForHydration('a|{}', 'x')).not.toThrow();
+	it('returns the value, round-tripping Convex types', async () => {
+		const value = { count: 9007199254740993n, nested: [{ a: null }] };
+		const fetch = endpointFetch({ value: convexToJson(value) });
 
-		const collector = collectorWith(hydration, { 'a|{}': undefined });
+		await expect(queryThroughHydration(fetch, 'messages:list', {})).resolves.toEqual({ value });
+	});
 
-		expect(collector.size).toBe(0);
+	it('rethrows a query error, as a ConvexError with its data when there is data', async () => {
+		const plain = endpointFetch({ error: { message: 'boom' } });
+		await expect(queryThroughHydration(plain, 'messages:list', {})).rejects.toThrow('boom');
+
+		const withData = endpointFetch({
+			error: {
+				message: '[Request ID: abc] Server Error\nUncaught ConvexError: not allowed',
+				data: convexToJson({ code: 'FORBIDDEN' })
+			}
+		});
+		const error = await queryThroughHydration(withData, 'messages:list', {}).catch((e) => e);
+		expect(error).toBeInstanceOf(ConvexError);
+		expect(error.data).toEqual({ code: 'FORBIDDEN' });
+		// The server's message survives, like with ConvexHttpClient.
+		expect(error.message).toBe('[Request ID: abc] Server Error\nUncaught ConvexError: not allowed');
+	});
+
+	it('accepts a replayed response, which has no headers', async () => {
+		const replayed = vi.fn(async () => new Response(JSON.stringify({ value: [1] })));
+
+		await expect(queryThroughHydration(replayed, 'messages:list', {})).resolves.toEqual({
+			value: [1]
+		});
+	});
+
+	it('returns undefined for a JSON response that is not from the endpoint', async () => {
+		vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const other = vi.fn(async () => new Response(JSON.stringify({ unrelated: true })));
+
+		await expect(queryThroughHydration(other, 'messages:list', {})).resolves.toBeUndefined();
+	});
+
+	it('returns undefined and warns once in dev when the handle is missing', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const fetch = endpointFetch('Not Found', { handle: false });
+
+		await expect(queryThroughHydration(fetch, 'messages:list', {})).resolves.toBeUndefined();
+		await queryThroughHydration(fetch, 'messages:list', {});
+
+		expect(warn).toHaveBeenCalledOnce();
+		expect(warn.mock.calls[0][0]).toContain('convexLoadHydration');
 	});
 });
 
-describe('takeHydratedValue — browser', () => {
-	it('round-trips Convex values exactly (int64, bytes, nested, null)', async () => {
-		const { hydration } = await loadModules();
-		const bytes = new Uint8Array([1, 2, 255]).buffer;
-		const value = {
-			count: 9007199254740993n,
-			bytes,
-			nested: [{ a: null, b: 1.5, c: 'text' }],
-			nothing: null
-		};
-		installDocument(
-			scriptText(hydration.serializeHydrationPayload(collectorWith(hydration, { 'k|{}': value })))
-		);
-
-		const taken = hydration.takeHydratedValue('k|{}');
-
-		expect(taken?.value).toEqual(value);
-		expect(Array.from(new Uint8Array((taken?.value as { bytes: ArrayBuffer }).bytes))).toEqual([
-			1, 2, 255
-		]);
-	});
-
-	it('returns null results as a hit, and unknown keys as a miss', async () => {
-		const { hydration } = await loadModules();
-		installDocument(JSON.stringify({ 'k|{}': null }));
-
-		expect(hydration.takeHydratedValue('k|{}')).toEqual({ value: null });
-		expect(hydration.takeHydratedValue('other|{}')).toBeUndefined();
-	});
-
-	it('serves the same key to several loads (e.g. layout and page)', async () => {
-		const { hydration } = await loadModules();
-		installDocument(JSON.stringify({ 'k|{}': 1 }));
-
-		expect(hydration.takeHydratedValue('k|{}')).toEqual({ value: 1 });
-		expect(hydration.takeHydratedValue('k|{}')).toEqual({ value: 1 });
-	});
-
-	it('reads the element once and removes it from the document', async () => {
-		const { hydration } = await loadModules();
-		const element = installDocument(JSON.stringify({ 'k|{}': 1 }));
-
-		hydration.takeHydratedValue('k|{}');
-		hydration.takeHydratedValue('k|{}');
-
-		expect(document.querySelector).toHaveBeenCalledOnce();
-		expect(element?.remove).toHaveBeenCalledOnce();
-	});
-
-	it('is a miss when the page has no payload (handle not installed, no SSR)', async () => {
-		const { hydration } = await loadModules();
-		installDocument(null);
-
-		expect(hydration.takeHydratedValue('k|{}')).toBeUndefined();
-	});
-
-	it('is a miss (not a crash) for a malformed payload', async () => {
-		const { hydration } = await loadModules();
-		installDocument('{not json');
-
-		expect(hydration.takeHydratedValue('k|{}')).toBeUndefined();
-	});
-
-	it('is a miss (not a crash) for a value that is not valid Convex JSON, and warns once in dev', async () => {
-		env.dev = true;
-		const { hydration } = await loadModules();
-		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-		installDocument(JSON.stringify({ 'a|{}': { $integer: 5 }, 'b|{}': { $bytes: 7 } }));
-
-		expect(hydration.takeHydratedValue('a|{}')).toBeUndefined();
-		expect(hydration.takeHydratedValue('b|{}')).toBeUndefined();
-
-		expect(warn).toHaveBeenCalledOnce();
-		warn.mockRestore();
-	});
-
-	it('is never used after setupConvex / setupAuth flushed (client-side navigation)', async () => {
-		const { hydration, singleton } = await loadModules();
-		installDocument(JSON.stringify({ 'k|{}': 1 }));
-
-		singleton.flushDeferredSubscriptions();
-
-		expect(hydration.takeHydratedValue('k|{}')).toBeUndefined();
-	});
-
-	it('stays unused after closeConvex() re-opens the deferred queue', async () => {
-		const { hydration, singleton } = await loadModules();
-		installDocument(JSON.stringify({ 'k|{}': 1 }));
-		singleton.flushDeferredSubscriptions();
-
-		await singleton.closeConvex();
-
-		expect(singleton.isInitialHydration()).toBe(false);
-		expect(hydration.takeHydratedValue('k|{}')).toBeUndefined();
-	});
-});
-
-describe('warnHydrationMiss — browser, dev only', () => {
-	it('warns when the server embedded results but a hydration load found none', async () => {
-		env.dev = true;
-		const { hydration } = await loadModules();
-		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-		installDocument(JSON.stringify({ 'other|{}': 1 }));
-		hydration.takeHydratedValue('k|{}');
-
-		hydration.warnHydrationMiss('messages:list');
-
-		expect(warn).toHaveBeenCalledOnce();
-		expect(warn.mock.calls[0][0]).toContain('messages:list');
-		warn.mockRestore();
-	});
-
-	it('stays quiet without embedded results (no handle, ssr = false), in production, or after hydration', async () => {
+describe('warnMissingFetch', () => {
+	it('warns once per query in dev, with the fix', () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-		env.dev = true;
-		let { hydration } = await loadModules();
-		installDocument(null);
-		hydration.takeHydratedValue('k|{}');
-		hydration.warnHydrationMiss('no-handle');
+		warnMissingFetch('messages:list');
+		warnMissingFetch('messages:list');
+		warnMissingFetch('users:get');
 
+		expect(warn).toHaveBeenCalledTimes(2);
+		expect(warn.mock.calls[0][0]).toContain('{ fetch }');
+	});
+
+	it('stays quiet in production', () => {
 		env.dev = false;
-		({ hydration } = await loadModules());
-		installDocument('{}');
-		hydration.takeHydratedValue('k|{}');
-		hydration.warnHydrationMiss('production');
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-		env.dev = true;
-		const modules = await loadModules();
-		installDocument('{}');
-		modules.hydration.takeHydratedValue('k|{}');
-		modules.singleton.flushDeferredSubscriptions();
-		modules.hydration.warnHydrationMiss('after-hydration');
+		warnMissingFetch('messages:list');
 
 		expect(warn).not.toHaveBeenCalled();
-		warn.mockRestore();
+	});
+});
+
+describe('queryThroughHydration — base path (kit.paths.base)', () => {
+	async function endpointUrlWith(pathsModule: Record<string, unknown>) {
+		vi.resetModules();
+		vi.doMock('$app/paths', () => pathsModule);
+		const hydration = await import('./hydration.js');
+		const fetch = vi.fn(async () => new Response(JSON.stringify({ value: null })));
+		await hydration.queryThroughHydration(fetch, 'messages:list', {});
+		vi.doUnmock('$app/paths');
+		return (fetch.mock.calls[0] as unknown[])[0] as string;
+	}
+
+	it('uses resolve() where SvelteKit has it (2.26+ and 3)', async () => {
+		const url = await endpointUrlWith({
+			resolve: (path: string) => `/app${path}`,
+			asset: () => ''
+		});
+
+		expect(url).toMatch(/^\/app\/__convex-svelte\/q\/[0-9a-z]+$/);
+	});
+
+	it('falls back to base before SvelteKit 2.26', async () => {
+		// `resolve: undefined` stands in for the missing export: vitest's module
+		// mocks throw on undefined exports, real module namespaces don't.
+		expect(await endpointUrlWith({ base: '/app', assets: '', resolve: undefined })).toMatch(
+			/^\/app\/__convex-svelte\/q\//
+		);
+		// Relative paths: SvelteKit makes base relative to the page during SSR.
+		expect(await endpointUrlWith({ base: '..', assets: '', resolve: undefined })).toMatch(
+			/^\.\.\/__convex-svelte\/q\//
+		);
 	});
 });

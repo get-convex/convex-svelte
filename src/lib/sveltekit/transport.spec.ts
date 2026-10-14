@@ -6,8 +6,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // - Client-side navigation opens ONE live subscription on the authenticated
 //   singleton ConvexClient and awaits its first value — no one-shot
 //   client.query() followed by a second subscription, no ConvexHttpClient.
-// - During the initial hydration, the server's result from the SSR payload is
-//   reused and the subscription is deferred until auth is set up.
+// - During the initial hydration, a load that passed its fetch gets the server's
+//   result through SvelteKit's fetch replay, and the subscription is deferred
+//   until auth is set up.
 // ---------------------------------------------------------------------------
 
 // All mock variables must live inside vi.hoisted so they exist when
@@ -18,7 +19,8 @@ const {
 	mockHttpClientConstructed,
 	MockConvexHttpClient,
 	firstValue,
-	mockTakeHydratedValue
+	mockQueryThroughHydration,
+	hydration
 } = vi.hoisted(() => {
 	// Simulate browser environment BEFORE any module evaluates IS_BROWSER.
 	// IS_BROWSER = typeof globalThis.document !== 'undefined'
@@ -56,7 +58,16 @@ const {
 		mockHttpClientConstructed,
 		MockConvexHttpClient,
 		firstValue,
-		mockTakeHydratedValue: vi.fn<(key: string) => { value: unknown } | undefined>()
+		mockQueryThroughHydration:
+			vi.fn<
+				(
+					fetch: typeof globalThis.fetch,
+					name: string,
+					args: Record<string, unknown>
+				) => Promise<{ value: unknown } | undefined>
+			>(),
+		/** Whether the page is in its initial hydration (isInitialHydration()). */
+		hydration: { initial: false }
 	};
 });
 
@@ -69,7 +80,9 @@ vi.mock('../internal/singleton.js', () => ({
 		disabled: false,
 		onUpdate: vi.fn()
 	}),
-	deferSubscription: (fn: () => void) => fn()
+	deferSubscription: (fn: () => void) => fn(),
+	isInitialHydration: () => hydration.initial,
+	_getServerToken: () => undefined
 }));
 
 vi.mock('convex/browser', () => ({
@@ -77,9 +90,8 @@ vi.mock('convex/browser', () => ({
 }));
 
 vi.mock('./hydration.js', () => ({
-	takeHydratedValue: mockTakeHydratedValue,
-	recordForHydration: vi.fn(),
-	warnHydrationMiss: vi.fn()
+	queryThroughHydration: mockQueryThroughHydration,
+	warnMissingFetch: vi.fn()
 }));
 
 vi.mock('./query-detached.svelte.js', () => ({
@@ -133,7 +145,7 @@ import {
 	decodeConvexLoadPaginated
 } from './transport.svelte.js';
 import { createDetachedQuery, openDetachedQuery } from './query-detached.svelte.js';
-import { warnHydrationMiss } from './hydration.js';
+import { warnMissingFetch } from './hydration.js';
 import {
 	createDetachedPaginatedQuery,
 	openDetachedPaginatedQuery
@@ -153,10 +165,14 @@ async function isSettled(promise: Promise<unknown>): Promise<boolean> {
 	return settled;
 }
 
+// Client-side navigation unless a test opts into the initial hydration.
+beforeEach(() => {
+	hydration.initial = false;
+});
+
 describe('convexLoad — client-side navigation opens a single live subscription', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
-		mockTakeHydratedValue.mockReturnValue(undefined);
 	});
 
 	it('opens one immediate route-scoped subscription and never runs a one-shot query', async () => {
@@ -209,26 +225,28 @@ describe('convexLoad — client-side navigation opens a single live subscription
 	});
 });
 
-describe('convexLoad — initial hydration reuses the SSR payload', () => {
+describe('convexLoad — initial hydration reuses the server result via fetch replay', () => {
+	const loadFetch = vi.fn() as unknown as typeof globalThis.fetch;
+
 	beforeEach(() => {
 		vi.clearAllMocks();
+		hydration.initial = true;
 	});
 
-	it('looks the result up by query key', async () => {
-		mockTakeHydratedValue.mockReturnValue({ value: ['ssr'] });
+	it("queries through the endpoint with the load's fetch and defers the subscription", async () => {
+		mockQueryThroughHydration.mockResolvedValue({ value: ['ssr'] });
 
-		await convexLoad(mockRef, { muteWords: [] });
+		const result = await convexLoad(
+			mockRef,
+			{ muteWords: [] },
+			{ fetch: loadFetch, keepAlive: false }
+		);
 
-		expect(mockTakeHydratedValue).toHaveBeenCalledWith('messages:list|{"muteWords":[]}');
-	});
-
-	it('uses the server result and defers the subscription (no immediate query)', async () => {
-		mockTakeHydratedValue.mockReturnValue({ value: ['ssr'] });
-
-		const result = await convexLoad(mockRef, {}, { keepAlive: false });
-
+		expect(mockQueryThroughHydration).toHaveBeenCalledWith(loadFetch, 'messages:list', {
+			muteWords: []
+		});
 		expect(result.data).toEqual(['ssr']);
-		expect(createDetachedQuery).toHaveBeenCalledWith(mockRef, {}, ['ssr'], {
+		expect(createDetachedQuery).toHaveBeenCalledWith(mockRef, { muteWords: [] }, ['ssr'], {
 			scope: 'route',
 			keepAlive: false
 		});
@@ -236,43 +254,52 @@ describe('convexLoad — initial hydration reuses the SSR payload', () => {
 		expect(mockSingletonQuery).not.toHaveBeenCalled();
 	});
 
-	it('warns (dev) when there is no server result, then subscribes immediately', async () => {
-		mockTakeHydratedValue.mockReturnValue(undefined);
+	it('reuses falsy server results such as null', async () => {
+		mockQueryThroughHydration.mockResolvedValue({ value: null });
 
+		const result = await convexLoad(mockRef, {}, { fetch: loadFetch });
+
+		expect(result.data).toBeNull();
+		expect(openDetachedQuery).not.toHaveBeenCalled();
+	});
+
+	it('warns (dev) when the load passes no fetch, then subscribes immediately', async () => {
 		const load = convexLoad(mockRef, {});
 		firstValue.resolve();
 		await load;
 
-		expect(warnHydrationMiss).toHaveBeenCalledWith('messages:list');
+		expect(warnMissingFetch).toHaveBeenCalledWith('messages:list');
+		expect(mockQueryThroughHydration).not.toHaveBeenCalled();
 		expect(openDetachedQuery).toHaveBeenCalledOnce();
 	});
 
-	it('hydrate: false skips the payload lookup and the warning', async () => {
-		mockTakeHydratedValue.mockReturnValue({ value: ['ssr'] });
+	it('subscribes immediately when the handle is missing', async () => {
+		mockQueryThroughHydration.mockResolvedValue(undefined);
 
-		const load = convexLoad(mockRef, {}, { hydrate: false });
+		const load = convexLoad(mockRef, {}, { fetch: loadFetch });
+		await Promise.resolve();
 		firstValue.resolve();
 		await load;
 
-		expect(mockTakeHydratedValue).not.toHaveBeenCalled();
-		expect(warnHydrationMiss).not.toHaveBeenCalled();
 		expect(openDetachedQuery).toHaveBeenCalledOnce();
 	});
 
-	it('reuses falsy server results such as null', async () => {
-		mockTakeHydratedValue.mockReturnValue({ value: null });
+	it('ignores fetch after hydration (client-side navigation)', async () => {
+		hydration.initial = false;
 
-		const result = await convexLoad(mockRef, {});
+		const load = convexLoad(mockRef, {}, { fetch: loadFetch });
+		firstValue.resolve();
+		await load;
 
-		expect(result.data).toBeNull();
-		expect(openDetachedQuery).not.toHaveBeenCalled();
+		expect(mockQueryThroughHydration).not.toHaveBeenCalled();
+		expect(warnMissingFetch).not.toHaveBeenCalled();
+		expect(openDetachedQuery).toHaveBeenCalledOnce();
 	});
 });
 
 describe('convexLoadPaginated — client-side navigation opens a single live subscription', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
-		mockTakeHydratedValue.mockReturnValue(undefined);
 	});
 
 	it('opens one immediate route-scoped subscription and never runs a one-shot query', async () => {
@@ -323,20 +350,28 @@ describe('convexLoadPaginated — client-side navigation opens a single live sub
 	});
 });
 
-describe('convexLoadPaginated — initial hydration reuses the SSR payload', () => {
+describe('convexLoadPaginated — initial hydration reuses the first page via fetch replay', () => {
+	const loadFetch = vi.fn() as unknown as typeof globalThis.fetch;
+
 	beforeEach(() => {
 		vi.clearAllMocks();
+		hydration.initial = true;
 	});
 
-	it('looks the first page up by paginated query key (page size included)', async () => {
+	it('queries the first page through the endpoint, page size in paginationOpts', async () => {
 		const page = { page: [{ id: 1 }], isDone: false, continueCursor: 'c' };
-		mockTakeHydratedValue.mockReturnValue({ value: page });
+		mockQueryThroughHydration.mockResolvedValue({ value: page });
 
-		const result = await convexLoadPaginated(mockRef, { muteWords: [] }, { initialNumItems: 10 });
-
-		expect(mockTakeHydratedValue).toHaveBeenCalledWith(
-			'paginated|messages:list|{"muteWords":[]}|10'
+		const result = await convexLoadPaginated(
+			mockRef,
+			{ muteWords: [] },
+			{ initialNumItems: 10, fetch: loadFetch }
 		);
+
+		expect(mockQueryThroughHydration).toHaveBeenCalledWith(loadFetch, 'messages:list', {
+			muteWords: [],
+			paginationOpts: { numItems: 10, cursor: null }
+		});
 		expect(result.results).toEqual([{ id: 1 }]);
 		expect(createDetachedPaginatedQuery).toHaveBeenCalledWith(
 			mockRef,
@@ -346,19 +381,13 @@ describe('convexLoadPaginated — initial hydration reuses the SSR payload', () 
 		expect(openDetachedPaginatedQuery).not.toHaveBeenCalled();
 	});
 
-	it('warns (dev) on a miss, and hydrate: false skips lookup and warning', async () => {
-		mockTakeHydratedValue.mockReturnValue(undefined);
-		const miss = convexLoadPaginated(mockRef, {}, { initialNumItems: 5 });
+	it('warns (dev) when the load passes no fetch, then subscribes immediately', async () => {
+		const load = convexLoadPaginated(mockRef, {}, { initialNumItems: 5 });
 		firstValue.resolve();
-		await miss;
-		expect(warnHydrationMiss).toHaveBeenCalledOnce();
+		await load;
 
-		vi.clearAllMocks();
-		const optOut = convexLoadPaginated(mockRef, {}, { initialNumItems: 5, hydrate: false });
-		firstValue.resolve();
-		await optOut;
-		expect(mockTakeHydratedValue).not.toHaveBeenCalled();
-		expect(warnHydrationMiss).not.toHaveBeenCalled();
+		expect(warnMissingFetch).toHaveBeenCalledOnce();
+		expect(openDetachedPaginatedQuery).toHaveBeenCalledOnce();
 	});
 });
 

@@ -2,9 +2,13 @@ import { convexLoad } from '$lib/sveltekit/index.js';
 import { api } from '../../../convex/_generated/api.js';
 
 // Universal page load that waits for its parents first.
-export const load = async ({ parent }) => {
+export const load = async ({ parent, fetch }) => {
 	await parent();
 	return {
-		pageMessages: await convexLoad(api.messages.list, { muteWords: ['__e2e_nested_page__'] })
+		pageMessages: await convexLoad(
+			api.messages.list,
+			{ muteWords: ['__e2e_nested_page__'] },
+			{ fetch }
+		)
 	};
 };

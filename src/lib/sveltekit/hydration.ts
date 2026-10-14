@@ -1,152 +1,180 @@
 /**
- * SSR hydration payload for `convexLoad()` / `convexLoadPaginated()` in
- * universal (`+page.ts` / `+layout.ts`) load functions.
+ * Hydration for `convexLoad()` / `convexLoadPaginated()` in universal load
+ * functions (`+page.ts` / `+layout.ts`), built on SvelteKit's fetch replay.
  *
- * SvelteKit re-runs universal loads in the browser during hydration — before
- * the root layout's `setupAuth()` has authenticated the client. Re-fetching
- * there would return unauthenticated data and delay interactivity. Instead,
- * the server embeds its `convexLoad` results in the HTML (opt-in via the
- * `convexLoadHydration` handle), and the loads re-running during hydration
- * reuse them. The live subscription then starts after auth, like for the
- * transport path of server loads.
+ * SvelteKit runs universal loads on the server, then again in the browser
+ * while the page hydrates — before the root layout's `setupAuth()` has
+ * authenticated the client. When a load passes its `fetch`, convexLoad sends
+ * its server query through that fetch to the endpoint served by the
+ * `convexLoadHydration` handle (`hydration-server.ts`). SvelteKit records the
+ * response in the page and replays it when the same load runs during
+ * hydration: no request, and no query before auth. SvelteKit only records
+ * fetches of universal loads, so results of server loads never end up in the
+ * HTML.
  *
- * This module is universal: the server-only half (AsyncLocalStorage + handle)
- * lives in `hydration-server.ts` and registers the collector getter.
+ * This module is universal; the endpoint lives in `hydration-server.ts`.
  */
 import { DEV } from 'esm-env';
-import { convexToJson, jsonToConvex, type JSONValue, type Value } from 'convex/values';
-import { isInitialHydration } from '../internal/singleton.js';
+import * as paths from '$app/paths';
+import { ConvexError, convexToJson, jsonToConvex, type JSONValue, type Value } from 'convex/values';
 
-/** `convexLoad` results of universal loads recorded during one server request, by query key. */
-export type HydrationCollector = Map<string, Value>;
-
-let collectorGetter: (() => HydrationCollector | undefined) | null = null;
+/** Path prefix of the endpoint the `convexLoadHydration` handle serves. */
+export const HYDRATION_PATH = '/__convex-svelte/q/';
 
 /**
- * Register how to find the current request's collector — only while a
- * universal load runs. Called once by `hydration-server.ts`, so universal code
- * never imports `node:async_hooks` or SvelteKit internals.
+ * Endpoint pathnames: one per page, query and args (`<prefix><hash>`).
+ * Prerendering writes every fetch of a page to a file named after its
+ * pathname, and at runtime SvelteKit's server-side fetch sends requests to
+ * such a path to the static file instead of through the app. So the pathname
+ * is neither the page's own nor shared with any other page — a prerendered
+ * page and a server-rendered one never request the same path.
+ */
+export const HYDRATION_PATHNAME = /\/__convex-svelte\/q\/[0-9a-z]+$/;
+
+let serverPagePathname: (() => string | undefined) | undefined;
+
+/**
+ * Register how the server reads the pathname of the page being rendered: the
+ * `convexLoadHydration` handle keeps it per request. Universal load functions
+ * can't read it on the server otherwise.
  * @internal
  */
-export function _setHydrationCollectorGetter(getter: () => HydrationCollector | undefined): void {
-	collectorGetter = getter;
+export function _setServerPagePathname(getter: () => string | undefined): void {
+	serverPagePathname = getter;
+}
+
+/** Pathname of the page being rendered, the same on the server and in the browser. */
+function pagePathname(): string {
+	return serverPagePathname?.() ?? globalThis.location?.pathname ?? '';
 }
 
 /**
- * Server: remember a `convexLoad` result for the SSR payload. No-op unless the
- * `convexLoadHydration` handle is active and a universal load is running.
+ * URL of the endpoint for a request body on the current page, under the app's
+ * base path (`kit.paths.base`): SvelteKit's server-side fetch only routes
+ * requests inside it through the app (handle, cookies, recording for replay).
  *
- * @param key - See `query-key.ts`.
- * @param value - The query result.
+ * On the server with relative paths (SvelteKit's default) this is relative to
+ * the page, in the browser absolute; SvelteKit records and matches the
+ * resolved path, so both sides agree.
  */
-export function recordForHydration(key: string, value: unknown): void {
-	if (value === undefined) return;
-	collectorGetter?.()?.set(key, value as Value);
+function endpointUrl(body: string): string {
+	const path = `${HYDRATION_PATH}${hash(`${pagePathname()} ${body}`)}`;
+	// SvelteKit 2.26+ and 3 have resolve(); before 2.26 SvelteKit 2 only has base,
+	// and SvelteKit 3 no longer exports base. Each export is missing in some
+	// supported version, so read them dynamically rather than importing them.
+	const resolve = Reflect.get(paths, 'resolve') as ((path: string) => string) | undefined;
+	if (typeof resolve === 'function') return resolve(path);
+	const base = Reflect.get(paths, 'base') as string | undefined;
+	return `${base ?? ''}${path}`;
 }
 
-export const PAYLOAD_ATTRIBUTE = 'data-convex-load';
-
-/**
- * Placeholder in the `<head>` of `src/app.html` that `convexLoadHydration`
- * replaces with the payload. A placeholder replaced in `transformPageChunk` is
- * how SvelteKit's docs inject request-specific markup (e.g. `%lang%`).
- */
-export const HYDRATION_PLACEHOLDER = '%convex.hydration%';
-
-// Inside a <script> element only `</script` and `<!--` are special; escaping
-// every `<` covers both. U+2028/U+2029 are escaped for older JS parsers.
-// Same approach as SvelteKit's own serialize_data.
-const unsafeCharacters = /[<\u2028\u2029]/g;
-const escapes: Record<string, string> = {
-	'<': '\\u003C',
-	'\u2028': '\\u2028',
-	'\u2029': '\\u2029'
-};
-
-/**
- * Server: build the `<script>` element holding the collected results, or `''`
- * when nothing was collected (e.g. `ssr = false`, or no universal convexLoad).
- * The browser then knows any element it finds holds real server results.
- */
-export function serializeHydrationPayload(collector: HydrationCollector): string {
-	if (collector.size === 0) return '';
-	const payload: Record<string, JSONValue> = {};
-	for (const [key, value] of collector) {
-		payload[key] = convexToJson(value);
+/** Short, stable hash (53-bit cyrb53) of a string, in base 36. */
+function hash(value: string): string {
+	let h1 = 0xdeadbeef;
+	let h2 = 0x41c6ce57;
+	for (let i = 0; i < value.length; i++) {
+		const char = value.charCodeAt(i);
+		h1 = Math.imul(h1 ^ char, 2654435761);
+		h2 = Math.imul(h2 ^ char, 1597334677);
 	}
-	const json = JSON.stringify(payload).replace(unsafeCharacters, (c) => escapes[c]);
-	return `<script type="application/json" ${PAYLOAD_ATTRIBUTE}>${json}</script>`;
+	h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+	h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+	return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
 }
 
-/** Browser: parsed payload of the initial document; `null` once hydration is over. */
-let clientPayload: Map<string, JSONValue> | null | undefined;
-/** Browser: the initial document contained server results (the handle is active). */
-let hasPayloadElement = false;
+/** SvelteKit's `fetch` from the load event. */
+export type LoadFetch = typeof globalThis.fetch;
 
-function readClientPayload(): Map<string, JSONValue> {
-	const element = globalThis.document?.querySelector(`script[${PAYLOAD_ATTRIBUTE}]`);
-	hasPayloadElement = !!element;
-	element?.remove();
+/** Request body: `name` is the Convex function name, `args` its Convex JSON args. */
+export type HydrationRequestBody = { name: string; args: JSONValue };
+
+/** Response body: the query's Convex JSON value, or the error it threw. */
+export type HydrationResponseBody =
+	| { value: JSONValue }
+	| { error: { message: string; data?: JSONValue } };
+
+/**
+ * Run a query through the endpoint with the load's `fetch`. The request is
+ * identical on the server and in the browser, which is what SvelteKit matches
+ * when it replays the server's response during hydration.
+ *
+ * @returns The query result, or `undefined` if the endpoint isn't there (the
+ * `convexLoadHydration` handle isn't installed) — the caller then queries
+ * directly.
+ * @throws The query's error, like `ConvexHttpClient.query()` would.
+ */
+export async function queryThroughHydration(
+	fetch: LoadFetch,
+	functionName: string,
+	args: Record<string, unknown>
+): Promise<{ value: Value } | undefined> {
+	const body = JSON.stringify({
+		name: functionName,
+		args: convexToJson(args as Value)
+	} satisfies HydrationRequestBody);
+	let result: unknown;
 	try {
-		const json = JSON.parse(element?.textContent || '{}') as Record<string, JSONValue>;
-		return new Map(Object.entries(json));
+		const response = await fetch(endpointUrl(body), {
+			method: 'POST',
+			// JSON, not a form submission: SvelteKit's CSRF check would reject a
+			// text/plain POST when `paths.origin` differs from the request origin.
+			headers: { 'content-type': 'application/json' },
+			body
+		});
+		// Recognized by its body: a response SvelteKit replays carries no headers,
+		// and without the handle the request gets SvelteKit's 404 page.
+		result = response.ok ? await response.json().catch(() => undefined) : undefined;
 	} catch {
-		return new Map();
+		// Unreachable (e.g. a network error): query directly instead.
+		result = undefined;
 	}
+	if (!isHydrationResponse(result)) {
+		warnOnce(
+			'handle',
+			"[convex-svelte] convexLoad({ fetch }) couldn't reach the convexLoadHydration endpoint, " +
+				'so it queries Convex directly. Add the handle to hooks.server.ts, and pass fetch ' +
+				'in universal loads (+page.ts) — server loads need no fetch.'
+		);
+		return undefined;
+	}
+	if ('error' in result) {
+		if (result.error.data === undefined) throw new Error(result.error.message);
+		// Like ConvexHttpClient: the data, plus the server's message (with its
+		// request ID) instead of the stringified data ConvexError would default to.
+		const error = new ConvexError(jsonToConvex(result.error.data));
+		error.message = result.error.message;
+		throw error;
+	}
+	return { value: jsonToConvex(result.value) };
+}
+
+function isHydrationResponse(value: unknown): value is HydrationResponseBody {
+	return typeof value === 'object' && value !== null && ('value' in value || 'error' in value);
 }
 
 /**
- * Browser: the server's result for `key` while the initial page hydrates.
- * Returns `undefined` once `setupConvex()` / `setupAuth()` have run — later
- * loads are client-side navigations and must never see the stale SSR data.
+ * Browser, dev only: a universal load ran convexLoad during hydration without
+ * passing `fetch`, so it queries Convex before `setupAuth()`.
  */
-export function takeHydratedValue(key: string): { value: Value } | undefined {
-	if (clientPayload === null) return undefined;
-	if (!isInitialHydration()) {
-		clientPayload = null;
-		return undefined;
-	}
-	clientPayload ??= readClientPayload();
-	const json = clientPayload.get(key);
-	if (json === undefined) return undefined;
-	try {
-		return { value: jsonToConvex(json) };
-	} catch (error) {
-		// E.g. HTML rewritten by a proxy, or different convex versions on server
-		// and client. The payload is only an optimization: query instead.
-		warnMalformedPayload(error);
-		return undefined;
-	}
-}
-
-let warnedMalformed = false;
-
-function warnMalformedPayload(error: unknown): void {
-	if (!DEV || warnedMalformed) return;
-	warnedMalformed = true;
-	console.warn('[convex-svelte] Ignoring an unreadable convexLoad hydration payload:', error);
-}
-
-/**
- * Browser, dev only: explain why a load re-running during hydration found no
- * server result although the server embedded results for this page — it now
- * queries Convex before `setupAuth()`. Pages without results (e.g. `ssr =
- * false`) stay quiet, since there is nothing to fix there.
- */
-export function warnHydrationMiss(functionName: string): void {
-	if (!DEV || !hasPayloadElement || !isInitialHydration()) return;
-	console.warn(
-		`[convex-svelte] ${functionName}: no server result to reuse during hydration, so it ` +
-			'queries Convex before setupAuth() authenticated the client. Await convexLoad() in ' +
-			'universal loads (a streamed result is only embedded if it finished before the page ' +
-			'HTML was generated) and pass the same args on the server and in the browser, or ' +
-			'pass { hydrate: false } to silence this.'
+export function warnMissingFetch(functionName: string): void {
+	warnOnce(
+		`fetch:${functionName}`,
+		`[convex-svelte] ${functionName}: convexLoad in a universal load re-runs in the browser ` +
+			"during hydration, before auth is set up. Pass the load's fetch to reuse the server " +
+			'result: `export const load = async ({ fetch }) => ({ x: await convexLoad(query, args, ' +
+			'{ fetch }) })`, with the convexLoadHydration handle in hooks.server.ts.'
 	);
 }
 
-/** Reset browser state. Tests only. */
-export function _resetHydrationPayload(): void {
-	clientPayload = undefined;
-	hasPayloadElement = false;
-	warnedMalformed = false;
+const warned = new Set<string>();
+
+function warnOnce(key: string, message: string): void {
+	if (!DEV || warned.has(key)) return;
+	warned.add(key);
+	console.warn(message);
+}
+
+/** Reset dev warnings. Tests only. */
+export function _resetHydrationWarnings(): void {
+	warned.clear();
 }
