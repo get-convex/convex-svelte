@@ -45,6 +45,11 @@ export function _serverTokenContext(): { inside: boolean; used: boolean } {
  * Store the auth token for the duration of `fn`, making it available to
  * `convexLoad()` and `createConvexHttpClient()` during SSR.
  *
+ * Only pass the requesting user's own token (e.g. from their session cookie).
+ * With the `convexLoadHydration` handle, the request can run any public query
+ * with this token, so a shared or service token would let every visitor run
+ * queries as that identity.
+ *
  * Wrap your SvelteKit `resolve()` call with this in `hooks.server.ts`:
  *
  * ```ts

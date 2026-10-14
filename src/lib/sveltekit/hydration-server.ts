@@ -38,6 +38,9 @@ _setServerPagePathname(() => pageStorage.getStore());
  *
  * The endpoint runs Convex queries (never mutations or actions) with the token
  * from `withServerConvexToken`, so place this handle after your auth handle.
+ * Anyone who can send a request to your app can run any public query through
+ * it with that token, so only pass the requesting user's own token: a shared or
+ * service token would let every visitor run queries as that identity.
  *
  * @example
  * ```ts
