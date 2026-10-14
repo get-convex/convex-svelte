@@ -105,4 +105,12 @@ describe('initConvex — queryCache', () => {
 			verbose: true
 		});
 	});
+
+	it('keeps the client disabled on the server even when disabled: false is passed', () => {
+		initConvex('https://example.convex.cloud', { disabled: false });
+
+		expect(clientConstructed).toHaveBeenCalledWith('https://example.convex.cloud', {
+			disabled: true
+		});
+	});
 });

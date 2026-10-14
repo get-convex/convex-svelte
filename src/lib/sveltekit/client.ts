@@ -6,10 +6,14 @@
  * - `setupConvex(url)` in root layout — handles context + cleanup, calls initConvex internally
  */
 import { ConvexClient, type ConvexClientOptions } from 'convex/browser';
-import { getSingletonClient, getSingletonUrl, setSingleton } from '../internal/singleton.js';
+import {
+	getSingletonClient,
+	getSingletonOptions,
+	getSingletonUrl,
+	setSingleton
+} from '../internal/singleton.js';
+import { warnIgnoredOptions, withServerDisabled } from '../internal/client_options.js';
 import { configureQueryCache, type QueryCacheOptions } from './query-lifecycle.js';
-
-const IS_BROWSER = typeof globalThis.document !== 'undefined';
 
 export type InitConvexOptions = ConvexClientOptions & {
 	/**
@@ -27,6 +31,8 @@ export type InitConvexOptions = ConvexClientOptions & {
  * Initialize the Convex client at module level (before any component mounts).
  * Call from `hooks.client.ts` to ensure the client exists before `transport.decode`.
  * Idempotent — subsequent calls with the same URL return the existing client.
+ * Client options only apply when the client is created (like the
+ * `ConvexReactClient` constructor); later calls with different ones warn in dev.
  * A `queryCache` option is still applied, so editing it in `hooks.ts` takes
  * effect on HMR.
  *
@@ -53,9 +59,10 @@ export function initConvex(url: string, options: InitConvexOptions = {}): Convex
 		configureQueryCache(queryCache);
 	}
 	if (existing) {
+		warnIgnoredOptions('initConvex', getSingletonOptions(), clientOptions);
 		return existing;
 	}
-	const client = new ConvexClient(url, { disabled: !IS_BROWSER, ...clientOptions });
-	setSingleton(url, client);
+	const client = new ConvexClient(url, withServerDisabled(clientOptions));
+	setSingleton(url, client, clientOptions);
 	return client;
 }

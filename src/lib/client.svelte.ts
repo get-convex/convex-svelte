@@ -13,10 +13,12 @@ import { parseArgsWithSkip } from './internal/args.svelte.js';
 import {
 	getConvexClient,
 	getSingletonClient,
+	getSingletonOptions,
 	getSingletonUrl,
 	setSingleton,
 	flushDeferredSubscriptions
 } from './internal/singleton.js';
+import { warnIgnoredOptions, withServerDisabled } from './internal/client_options.js';
 import { isClientActive } from './internal/client_status.js';
 
 const _contextKey = '$$_convexClient';
@@ -54,9 +56,12 @@ export const setupConvex = (url: string, options: ConvexClientOptions = {}): Con
 				'Only one deployment per app is supported. Call closeConvex() first to switch deployments.'
 		);
 	}
-	const client = existing ?? new ConvexClient(url, { disabled: !BROWSER, ...options });
+	if (existing) {
+		warnIgnoredOptions('setupConvex', getSingletonOptions(), options);
+	}
+	const client = existing ?? new ConvexClient(url, withServerDisabled(options));
 	if (!existing) {
-		setSingleton(url, client);
+		setSingleton(url, client, options);
 	}
 
 	setConvexClientContext(client);
