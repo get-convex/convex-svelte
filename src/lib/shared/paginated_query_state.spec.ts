@@ -230,3 +230,61 @@ describe('PaginatedQueryStateMachine keepPreviousData', () => {
 		});
 	});
 });
+
+describe('PaginatedQueryStateMachine InvalidCursor reset limit (#61)', () => {
+	const invalidCursor = () => new Error('InvalidCursor: the cursor is no longer valid');
+	const loadMore = () => false;
+
+	function machineWithArgs() {
+		const machine = new PaginatedQueryStateMachine<string>({ initialNumItems: 3 });
+		machine.onArgsChange('{}');
+		return machine;
+	}
+
+	it('resets once, then surfaces a repeated InvalidCursor as the error', () => {
+		const machine = machineWithArgs();
+
+		expect(machine.onError(invalidCursor())).toBe(true);
+		const afterReset = machine.getSnapshot();
+		expect(afterReset).toMatchObject({ status: 'LoadingFirstPage', error: undefined });
+
+		// The resubscription only reports its empty loading snapshot, then fails again.
+		machine.onUpdate({ results: [], status: 'LoadingFirstPage', loadMore });
+		expect(machine.onError(invalidCursor())).toBe(false);
+
+		expect(machine.getSnapshot()).toMatchObject({
+			isLoading: false,
+			resetKey: afterReset.resetKey
+		});
+		expect(machine.getSnapshot().error?.message).toContain('InvalidCursor');
+	});
+
+	it('surfaces an InvalidCursor without resetting when allowReset is false', () => {
+		const machine = machineWithArgs();
+		const before = machine.getSnapshot().resetKey;
+
+		expect(machine.onError(invalidCursor(), { allowReset: false })).toBe(false);
+
+		expect(machine.getSnapshot().resetKey).toBe(before);
+		expect(machine.getSnapshot().error?.message).toContain('InvalidCursor');
+	});
+
+	it('allows another reset once a page arrived', () => {
+		const machine = machineWithArgs();
+		machine.onError(invalidCursor());
+
+		machine.onUpdate({ results: ['a'], status: 'CanLoadMore', loadMore });
+
+		expect(machine.onError(invalidCursor())).toBe(true);
+	});
+
+	it('allows another reset after the args changed or after reset()', () => {
+		const machine = machineWithArgs();
+		machine.onError(invalidCursor());
+		machine.onArgsChange('{"other":true}');
+		expect(machine.onError(invalidCursor())).toBe(true);
+
+		machine.reset();
+		expect(machine.onError(invalidCursor())).toBe(true);
+	});
+});

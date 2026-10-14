@@ -111,6 +111,13 @@ export class PaginatedQueryStateMachine<T> {
 	 * before the first server update). Flushed by `onUpdate`.
 	 */
 	private pendingLoadMoreNumItems: number | null = null;
+	/**
+	 * Whether the next InvalidCursor may reset pagination. Disarmed by a reset
+	 * and re-armed by a real result, changed args or `reset()`: if the cursor
+	 * keeps failing (e.g. another subscriber holds the failed query alive), the
+	 * second InvalidCursor is surfaced as an error instead of resetting forever.
+	 */
+	private invalidCursorResetArmed = true;
 
 	constructor(config: PaginatedQueryConfig<T>) {
 		this.config = config;
@@ -244,6 +251,7 @@ export class PaginatedQueryStateMachine<T> {
 		this.state.argsKey = newArgsKey;
 		// A queued loadMore belongs to the previous args — drop it.
 		this.pendingLoadMoreNumItems = null;
+		this.invalidCursorResetArmed = true;
 
 		// Track when args change from initial
 		if (!this.state.haveArgsEverChanged && this.state.initialArgsKey !== newArgsKey) {
@@ -297,6 +305,10 @@ export class PaginatedQueryStateMachine<T> {
 	 * "empty loading" snapshot to keep SSR-rendered content visible.
 	 */
 	onUpdate(update: PaginatedQueryUpdate<T>): void {
+		// A page arrived: the cursor works again. The empty loading snapshot right
+		// after a reset must not re-arm, or a persistent InvalidCursor loops.
+		if (update.status !== 'LoadingFirstPage') this.invalidCursorResetArmed = true;
+
 		// Hydration guard: if using initial data, ignore empty loading snapshots
 		// This keeps SSR-rendered content visible until real data arrives.
 		// Checked before keepPreviousData: SSR data is not "previous" data, and
@@ -350,10 +362,14 @@ export class PaginatedQueryStateMachine<T> {
 	 *
 	 * Detects InvalidCursor errors and triggers a pagination reset.
 	 *
+	 * @param options.allowReset - `false` surfaces even an InvalidCursor as the
+	 * error, e.g. when resubscribing can't help.
 	 * @returns `true` if we detected and handled an InvalidCursor (framework should resubscribe)
 	 */
-	onError(error: Error): boolean {
-		if (this.isInvalidCursorError(error)) {
+	onError(error: Error, options: { allowReset?: boolean } = {}): boolean {
+		const allowReset = options.allowReset ?? true;
+		if (allowReset && this.isInvalidCursorError(error) && this.invalidCursorResetArmed) {
+			this.invalidCursorResetArmed = false;
 			console.warn('PaginatedQueryStateMachine: InvalidCursor detected, resetting:', error.message);
 			this.pendingLoadMoreNumItems = null;
 			this.state = {
@@ -384,6 +400,7 @@ export class PaginatedQueryStateMachine<T> {
 	 */
 	reset(): void {
 		this.pendingLoadMoreNumItems = null;
+		this.invalidCursorResetArmed = true;
 		this.state = {
 			...this.state,
 			results: [],

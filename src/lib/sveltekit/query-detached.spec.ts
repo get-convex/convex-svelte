@@ -642,3 +642,103 @@ describe('openDetachedPaginatedQuery — immediate subscription with first page'
 		await expect(firstValue).rejects.toThrow('disabled or closed');
 	});
 });
+
+describe('openDetachedPaginatedQuery — failed pages (#61)', () => {
+	const invalidCursor = () => new Error('InvalidCursor: the cursor is no longer valid');
+
+	/** A subscription whose current value or failure can be set by the test. */
+	function paginatedSubscription() {
+		let current: { results: unknown[]; status: string; loadMore: () => boolean } | Error = {
+			results: [],
+			status: 'LoadingFirstPage',
+			loadMore: () => false
+		};
+		const subscription = Object.assign(vi.fn(), {
+			getCurrentValue: () => {
+				if (current instanceof Error) throw current;
+				return current;
+			}
+		});
+		client.onPaginatedUpdate_experimental.mockReturnValueOnce(subscription);
+		return {
+			subscription,
+			deliver(results: unknown[]) {
+				current = { results, status: 'CanLoadMore', loadMore: () => true };
+			},
+			fail(error: Error) {
+				current = error;
+			}
+		};
+	}
+
+	const callbacks = (call: number) => {
+		const [, , , onUpdate, onError] = client.onPaginatedUpdate_experimental.mock.calls[call] as [
+			unknown,
+			unknown,
+			unknown,
+			() => void,
+			(error: Error) => void
+		];
+		return { onUpdate, onError };
+	};
+
+	const open = () =>
+		openDetachedPaginatedQuery(ref, {}, { initialNumItems: 10, scope: 'route', immediate: true });
+
+	it('resubscribes once after an InvalidCursor, and the load keeps waiting for the first page', async () => {
+		const first = paginatedSubscription();
+		const second = paginatedSubscription();
+		const { result, firstValue } = open();
+
+		callbacks(0).onError(invalidCursor());
+		await Promise.resolve();
+
+		expect(first.subscription).toHaveBeenCalledOnce();
+		expect(client.onPaginatedUpdate_experimental).toHaveBeenCalledTimes(2);
+		expect(await settledState(firstValue)).toBe('pending');
+
+		second.deliver([{ id: 1 }]);
+		callbacks(1).onUpdate();
+
+		expect(await settledState(firstValue)).toBe('resolved');
+		expect(result.results).toEqual([{ id: 1 }]);
+	});
+
+	it('surfaces the error when the cursor keeps failing after the reset', async () => {
+		paginatedSubscription();
+		paginatedSubscription();
+		const { result, firstValue } = open();
+
+		callbacks(0).onError(invalidCursor());
+		await Promise.resolve();
+		callbacks(1).onError(invalidCursor());
+
+		expect(await settledState(firstValue)).toBe('rejected');
+		expect(client.onPaginatedUpdate_experimental).toHaveBeenCalledTimes(2);
+		expect(result.error?.message).toContain('InvalidCursor');
+		expect(result.isLoading).toBe(false);
+	});
+
+	it('does not retry when subscribing itself throws (failed query held by another subscriber)', async () => {
+		client.onPaginatedUpdate_experimental.mockImplementationOnce(() => {
+			throw invalidCursor();
+		});
+
+		const { result, firstValue } = open();
+		await Promise.resolve();
+
+		expect(client.onPaginatedUpdate_experimental).toHaveBeenCalledOnce();
+		expect(await settledState(firstValue)).toBe('rejected');
+		expect(result.error?.message).toContain('InvalidCursor');
+	});
+
+	it('reports a failed page that getCurrentValue() throws, instead of throwing', async () => {
+		const subscription = paginatedSubscription();
+		subscription.fail(new Error('page failed'));
+
+		const { result, firstValue } = open();
+
+		expect(await settledState(firstValue)).toBe('rejected');
+		expect(result.error?.message).toBe('page failed');
+	});
+});

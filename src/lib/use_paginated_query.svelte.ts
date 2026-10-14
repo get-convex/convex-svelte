@@ -5,6 +5,7 @@ import { useConvexClient } from './client.svelte.js';
 import { SKIP } from './shared/args.js';
 import { parseArgsWithSkip } from './internal/args.svelte.js';
 import { isClientActive } from './internal/client_status.js';
+import { subscribePaginated } from './shared/paginated_subscription.js';
 import type {
 	PageItem,
 	PaginatedReturnType,
@@ -134,50 +135,25 @@ export function usePaginatedQuery<Query extends FunctionReference<'query'>>(
 			return;
 		}
 
-		// Track if we've received data via callback to avoid duplicate processing
-		let hasReceivedUpdate = false;
-
-		// Create subscription to Convex paginated query
-		const unsubscribe = client.onPaginatedUpdate_experimental(
+		// Subscribe; errors the client throws (e.g. for a failed page) reach the
+		// machine like errors from onError, and cleanup is always returned.
+		const unsubscribe = subscribePaginated(
+			client,
 			query,
-			argsObject,
-			{ initialNumItems: opts.initialNumItems },
-			() => {
-				hasReceivedUpdate = true;
-				const current = unsubscribe.getCurrentValue?.();
-				if (!current) return;
-
-				// Feed update to state machine (handles hydration guard, etc.)
+			argsObject as FunctionArgs<Query>,
+			opts.initialNumItems,
+			(current) =>
 				machine.onUpdate({
 					results: current.results as PageItem<Query>[],
 					status: current.status,
 					loadMore: (numItems: number) => current.loadMore(numItems)
-				});
-			},
-			(error: Error) => {
-				hasReceivedUpdate = true;
-				// Feed error to state machine (handles InvalidCursor detection)
-				machine.onError(error);
-				// If InvalidCursor was detected, resetKey changed and effect will re-run
-			}
+				}),
+			// An InvalidCursor resets the machine (once), which changes resetKey
+			// and re-runs this effect — unless resubscribing can't help.
+			(error, retryable) => machine.onError(error, { allowReset: retryable })
 		);
 
-		// Get initial cached value if available (only if callback hasn't fired synchronously)
-		if (!hasReceivedUpdate) {
-			const current = unsubscribe.getCurrentValue?.();
-			if (current) {
-				machine.onUpdate({
-					results: current.results as PageItem<Query>[],
-					status: current.status,
-					loadMore: (numItems: number) => current.loadMore(numItems)
-				});
-			}
-		}
-
-		// Cleanup on unmount or re-run
-		return () => {
-			unsubscribe.unsubscribe();
-		};
+		return unsubscribe;
 	});
 
 	return {
