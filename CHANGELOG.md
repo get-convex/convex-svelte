@@ -1,5 +1,48 @@
 # convex-svelte
 
+## 0.15.1
+
+### Patch Changes
+
+- 77fe505: ### Fixes
+
+  - **No WebSocket during server rendering** - the client created by `setupConvex()` / `initConvex()` is now always disabled on the server, even when a caller passes `disabled: false`. Whether code runs on the server is decided at runtime (`typeof document`) instead of by the bundler's resolution of `esm-env`.
+  - **Ignored client options are reported** - client options only take effect where the shared client is created, like the `ConvexReactClient` constructor in React. When `setupConvex()` or a repeated `initConvex()` passes options that differ from the ones the client was created with (e.g. `expectAuth` in the root layout while `initConvex()` in `hooks.ts` created the client), a dev warning now names them instead of dropping them silently. Only primitive options are compared; functions and objects such as `logger` get a new identity on every hot reload.
+
+- e573223: ### Changes
+
+  - **`convexLoadHydration` now works on SvelteKit 2 and 3, built on SvelteKit's own fetch replay** - in 0.15.0 the handle embedded `convexLoad` results through a SvelteKit 2 internal flag that SvelteKit 3 removed, so it had no effect on SvelteKit 3. Now a universal load passes its `fetch` to `convexLoad`, which runs the server query through an endpoint served by the handle. SvelteKit records the response in the page and replays it during hydration, so the load neither requests nor queries Convex before `setupAuth()`. SvelteKit only records fetches of universal loads, so results of server loads never end up in the HTML.
+
+    ```ts
+    // hooks.server.ts — after your auth handle, so queries run with the user's token
+    export const handle = sequence(convexAuth, convexLoadHydration);
+
+    // +page.ts
+    export const load = async ({ fetch }) => ({
+    	tasks: await convexLoad(api.tasks.get, {}, { fetch })
+    });
+    ```
+
+    Migrating from 0.15.0: remove `%convex.hydration%` from `app.html`, place `convexLoadHydration` after your auth handle, pass `{ fetch }` in universal loads, and drop `hydrate: false` (a load without `fetch` doesn't use the endpoint). Works with SvelteKit 2.12 or later, and needs no SvelteKit internals.
+
+  - **The endpoint** (`/__convex-svelte/q/<hash>` below `kit.paths.base`, one path per page, query and args, so prerendered pages work too) only accepts same-origin JSON POST requests with a valid function name and Convex JSON args, runs public queries only (Convex rejects mutations, actions and internal functions there), uses the token from `withServerConvexToken`, and marks responses `private, no-store`. Only pass the requesting user's own token to `withServerConvexToken`: anyone who can send a request to your app can run any public query through the endpoint with that token, so a shared or service token would let every visitor run queries as that identity. If the endpoint can't be reached, `convexLoad` queries Convex directly.
+  - **Dev warnings** point out a universal `convexLoad` without `fetch`, `{ fetch }` without the handle, and a handle placed before the auth handle.
+
+- 8ace785: ### Fixes
+
+  - **Failed paginated queries no longer throw during setup** ([#61](https://github.com/get-convex/convex-svelte/issues/61)) - the Convex client throws from `getCurrentValue()` once a page has failed, and from `onPaginatedUpdate_experimental()` when another subscriber already holds the query in a failed state. `usePaginatedQuery`, `convexLoadPaginated` and `createDetachedPaginatedQuery` now report these errors through `error` instead of throwing, and always clean up their subscription.
+  - **`InvalidCursor` no longer resets forever** ([#61](https://github.com/get-convex/convex-svelte/issues/61)) - a paginated query resets once on `InvalidCursor`. If the cursor fails again before a page arrived, the error is shown instead of resetting in a loop. A loaded page, changed args or `reset()` allow the next reset.
+  - **`convexLoadPaginated` recovers from `InvalidCursor`** - it reset its state but never resubscribed, so it stayed in `LoadingFirstPage`. It now starts a fresh subscription, and a load waiting for its first page keeps waiting for it.
+
+- 9bfcda1: ### Fixes
+
+  - **Skipped queries in server loads** - `convexLoad(query, 'skip')` in a `+page.server.ts` / `+layout.server.ts` load failed with `Cannot stringify a function` since 0.15.0, because the skipped result has a `dispose()` function that SvelteKit can't serialize. `convexLoadPaginated(query, 'skip', ...)` failed the same way because of its `loadMore()`. The transport hooks now send skipped results to the browser and recreate them there, with the same shape as before.
+
+- cb4e310: ### Fixes
+
+  - **Installs with SvelteKit 3** - the optional `@sveltejs/kit` peer dependency is now `^2.12.0 || ^3.0.0`. With `^2.12.0`, npm refused to install `convex-svelte` 0.15.0 next to SvelteKit 3 (`ERESOLVE`).
+  - **No `runed` dependency** - nothing imported it any more, and its peer range (`@sveltejs/kit ^2.21.0`) caused an `ERESOLVE` warning on SvelteKit 3, and an error with `--strict-peer-deps`.
+
 ## 0.15.0
 
 ### Minor Changes
