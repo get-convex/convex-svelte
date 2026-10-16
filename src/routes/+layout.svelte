@@ -38,7 +38,7 @@
 					</li>
 					<li>
 						<a
-							href="https://github.com/get-convex/convex-svelte"
+							href="https://github.com/convex/convex-svelte"
 							target="_blank"
 							rel="noopener noreferrer"
 							aria-label="convex-svelte on GitHub"

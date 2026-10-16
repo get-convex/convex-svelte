@@ -30,8 +30,8 @@
 
 - 8ace785: ### Fixes
 
-  - **Failed paginated queries no longer throw during setup** ([#61](https://github.com/get-convex/convex-svelte/issues/61)) - the Convex client throws from `getCurrentValue()` once a page has failed, and from `onPaginatedUpdate_experimental()` when another subscriber already holds the query in a failed state. `usePaginatedQuery`, `convexLoadPaginated` and `createDetachedPaginatedQuery` now report these errors through `error` instead of throwing, and always clean up their subscription.
-  - **`InvalidCursor` no longer resets forever** ([#61](https://github.com/get-convex/convex-svelte/issues/61)) - a paginated query resets once on `InvalidCursor`. If the cursor fails again before a page arrived, the error is shown instead of resetting in a loop. A loaded page, changed args or `reset()` allow the next reset.
+  - **Failed paginated queries no longer throw during setup** ([#61](https://github.com/convex/convex-svelte/issues/61)) - the Convex client throws from `getCurrentValue()` once a page has failed, and from `onPaginatedUpdate_experimental()` when another subscriber already holds the query in a failed state. `usePaginatedQuery`, `convexLoadPaginated` and `createDetachedPaginatedQuery` now report these errors through `error` instead of throwing, and always clean up their subscription.
+  - **`InvalidCursor` no longer resets forever** ([#61](https://github.com/convex/convex-svelte/issues/61)) - a paginated query resets once on `InvalidCursor`. If the cursor fails again before a page arrived, the error is shown instead of resetting in a loop. A loaded page, changed args or `reset()` allow the next reset.
   - **`convexLoadPaginated` recovers from `InvalidCursor`** - it reset its state but never resubscribed, so it stayed in `LoadingFirstPage`. It now starts a fresh subscription, and a load waiting for its first page keeps waiting for it.
 
 - 9bfcda1: ### Fixes
@@ -61,7 +61,7 @@
   - **`convex-svelte/sveltekit` requires SvelteKit 2.12 or later**, because it now imports `$app/state`. It can no longer be imported outside a SvelteKit app, e.g. to use `createConvexHttpClient` in a Node script; use `ConvexHttpClient` from `convex/browser` there. `@sveltejs/kit@^2.12.0` is declared as an optional peer dependency.
 
   ### Fixes
-  - **`convexLoad` / `convexLoadPaginated` subscriptions are released after leaving a route** ([#57](https://github.com/get-convex/convex-svelte/issues/57)) - previously every query created through `convexLoad`, `convexLoadPaginated`, or the SvelteKit transport stayed subscribed for the life of the tab, so bandwidth and function calls grew with every visited page (including hover preloads and `invalidate()` re-runs). These queries are now route-scoped: they stay subscribed while they are reachable from `page.data` (all layouts plus the current page) or rendered by a component, and are released afterwards. A released query resubscribes automatically when it is used again.
+  - **`convexLoad` / `convexLoadPaginated` subscriptions are released after leaving a route** ([#57](https://github.com/convex/convex-svelte/issues/57)) - previously every query created through `convexLoad`, `convexLoadPaginated`, or the SvelteKit transport stayed subscribed for the life of the tab, so bandwidth and function calls grew with every visited page (including hover preloads and `invalidate()` re-runs). These queries are now route-scoped: they stay subscribed while they are reachable from `page.data` (all layouts plus the current page) or rendered by a component, and are released afterwards. A released query resubscribes automatically when it is used again.
   - **Unclaimed queries are closed after 5 s** - a query that no route ever uses (a hover preload the user doesn't click, a superseded navigation) is closed after 5 s and never takes a slot in the idle buffer, so hovering over many links can't push out pages you visited. A late click resubscribes.
 
   ### Features
