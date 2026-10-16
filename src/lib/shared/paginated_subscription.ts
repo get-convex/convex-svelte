@@ -5,7 +5,7 @@
  * The Convex client can throw instead of calling `onError`: from
  * `getCurrentValue()` once a page has failed, and from
  * `onPaginatedUpdate_experimental()` itself when another subscriber already
- * holds the query in a failed state (get-convex/convex-js#193). Thrown errors
+ * holds the query in a failed state (convex/convex-js#193). Thrown errors
  * are reported through `onError` here, so callers always get a cleanup function
  * back and their state machine sees the error.
  *

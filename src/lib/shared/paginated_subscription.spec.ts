@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { makeFunctionReference } from 'convex/server';
 import { subscribePaginated } from './paginated_subscription.js';
 
-// The Convex client can throw instead of calling onError (get-convex/convex-js#193):
+// The Convex client can throw instead of calling onError (convex/convex-js#193):
 // from getCurrentValue() for a failed page, and from onPaginatedUpdate_experimental()
 // itself. Those errors must reach onError, and a cleanup must always come back.
 

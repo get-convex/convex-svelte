@@ -10,7 +10,7 @@
 	"homepage": "https://convex.dev",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/get-convex/convex-svelte.git"
+		"url": "git+https://github.com/convex/convex-svelte.git"
 	},
 	"scripts": {
 		"dev": "concurrently --kill-others --prefix-colors blue,yellow --names 'svelte,convex' 'pnpm dev:client' 'pnpm dev:server'",
